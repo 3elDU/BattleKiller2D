@@ -156,6 +156,8 @@ class Main:
     def __init__(self, sip, sport):
         pygame.init()
 
+        self.fullscreen = False
+
         self.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H))
 
         self.textures = {
@@ -181,6 +183,7 @@ class Main:
 
         # For fps
         self.prevFrame = time.time()
+        self.fps = 1
 
         self.mainLoop()
 
@@ -228,6 +231,15 @@ class Main:
                         else:
                             self.selectedSlot = 0
 
+                    if e.key == pygame.K_f:
+                        self.fullscreen = not self.fullscreen
+                        if self.fullscreen:
+                            pygame.display.quit()
+                            self.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.FULLSCREEN)
+                        else:
+                            pygame.display.quit()
+                            self.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+
                     if e.key == pygame.K_r and self.c.disconnected:
                         RECONNECTING = True
                         self.running = False
@@ -269,7 +281,7 @@ class Main:
                 r = t.get_rect(topleft=(0, 0))
                 self.sc.blit(t, r)
 
-                t = self.font.render("FPS: " + str(1/(time.time()-self.prevFrame)), True, (0, 0, 0))
+                t = self.font.render("FPS: " + str(self.fps), True, (0, 0, 0))
                 r = t.get_rect(topleft=(0, BLOCK_H))
                 self.sc.blit(t, r)
 
@@ -318,9 +330,14 @@ class Main:
 
             pygame.display.update()
 
-            self.prevFrame = time.time()
+            v = 1/80
+            print(v)
+            if v > 0:
+                time.sleep(v)
 
-            # time.sleep(1/60)
+            self.fps = 1/(time.time()-self.prevFrame)
+
+            self.prevFrame = time.time()
 
 
 if __name__ == '__main__':

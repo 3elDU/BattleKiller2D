@@ -276,7 +276,7 @@ class Main:
                 self.lastBulletUpdate = time.time()
 
             if len(self.clients) > 0:
-                time.sleep(1/(80*len(self.clients)))
+                time.sleep(1/(300*len(self.clients)))
             else:
                 time.sleep(1/60)
 
