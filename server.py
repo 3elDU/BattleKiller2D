@@ -5,10 +5,20 @@ import time
 class Player:
     def __init__(self, x, y, color):
         self.x, self.y, self.color = x, y, color
+        self.active = True
 
 
-players = []
-players: [Player]
+class Bullet:
+    def __init__(self, x, y, movX, movY, color):
+        self.x, self.y, self.movX, self.movY, self.color = x, y, movX, movY, color
+        self.active = False
+
+
+players = {}
+players: {int: Player}
+
+bullets = []
+bullets: [Bullet]
 
 
 class Client:
@@ -27,63 +37,95 @@ class Client:
         self.dataToSend = []
         self.dataToSend: [str]
 
+        print("Client #" + str(self.i) + " connected: ", self.a)
+
     def update(self) -> None:
-        global players
-
         if not self.disconnected:
-            try:
-                msg = self.s.recv(131072).decode('utf-8')
+            global players
+            global bullets
 
-                for message in msg.split(';'):
-                    if message:
-                        if message == 'get_players':
-                            m = ''
-                            for player in players:
-                                if players.index(player) != self.i:
-                                    m += str(player.x) + '/' + str(player.y) + '/' + str(player.color) + ';'
-
-                            if m:
-                                self.dataToSend.append(m)
-
-                                # print(m)
-                        elif 'set_player' in message:
-                            # print(message)
-
-                            message = message.replace('set_player', '').split('/')
-
-                            p = Player(int(message[0]), int(message[1]), eval(message[2]))
-
-                            players[self.i] = p
-
-                        else:
-                            if message: print("Message from client:", message)
-            except socket.error:
-                pass
-            except Exception as e:
-                self.disconnected = True
-
-                print("Exception in Client.update():", e)
-
-                """
-                print("Disconnecting this client")
+            if not self.disconnected:
                 try:
-                    self.s.close()
+                    msg = self.s.recv(131072).decode('utf-8')
+
+                    for message in msg.split(';'):
+                        if message:
+                            if message == 'disconnect':
+                                self.disconnected = True
+                                players[self.i].active = False
+                                self.s.close()
+                                print("Client #" + str(self.i) + " disconnected: ", self.a)
+
+                            elif message == 'get_objects':
+                                m = ''
+
+                                for p in range(len(players)):
+                                    if p != self.i:
+                                        player = players[p]
+                                        m += 'p/' + str(p) + '/' + str(player.x) + '/' + str(player.y)\
+                                             + '/' + str(player.color) + '/' + str(player.active) + ';'
+
+                                for bullet in range(len(bullets)):
+                                    b = bullets[bullet]
+                                    m += 'b/' + str(bullets.index(b)) + '/' + str(b.x) + '/' + str(b.y)\
+                                        + '/' + str(b.movX) + '/' + str(b.movY)\
+                                        + '/' + str(b.color) + '/' + str(b.active) + ';'
+
+                                if m:
+                                    self.dataToSend.append(m)
+                            elif 'set_player' in message:
+                                # print(message)
+
+                                message = message.replace('set_player', '').split('/')
+
+                                p = Player(int(message[0]), int(message[1]), eval(message[2]))
+
+                                players[self.i] = p
+                            elif 'shoot' in message:
+                                message = message.replace('shoot', '').split('/')
+
+                                b = Bullet(int(message[0]), int(message[1]),
+                                           int(message[2]), int(message[3]), eval(message[4]))
+                                b.active = True
+
+                                # Checking if there's aren't any bullets that are in the same position as ours
+                                same_pos = False
+                                for bullet in bullets:
+                                    if bullet.x == b.x and bullet.y == b.y:
+                                        same_pos = True
+
+                                if not same_pos:
+                                    bullets.append(b)
+
+                            else:
+                                if message: print("Message from client:", message)
+                except socket.error:
+                    pass
                 except Exception as e:
-                    print("Exception while disconnecting client:", e)
-                """
+                    self.disconnected = True
 
-            try:
-                d = len(self.dataToSend)-1
+                    print("Exception in Client.update():", e)
 
-                if d >= 0:
-                    self.s.send(self.dataToSend[d].encode('utf-8'))
-                    self.s.send(';'.encode('utf-8'))
+                    """
+                    print("Disconnecting this client")
+                    try:
+                        self.s.close()
+                    except Exception as e:
+                        print("Exception while disconnecting client:", e)
+                    """
 
-                    self.dataToSend.pop(d)
-            except socket.error:
-                pass
-            except Exception as e:
-                print("Ex", e)
+                try:
+                    d = len(self.dataToSend)-1
+
+                    if d >= 0:
+                        self.s.send(self.dataToSend[d].encode('utf-8'))
+                        self.s.send(';'.encode('utf-8'))
+
+                        self.dataToSend.pop(d)
+                except socket.error:
+                    pass
+                except Exception as e:
+                    print("Ex", e)
 
 
 class Main:
@@ -115,11 +157,14 @@ class Main:
         self.clients = []
         self.clients: [Client]
 
+        self.lastBulletUpdate = time.time()
+
         # Entering main loop
         self.mainLoop()
 
     def mainLoop(self) -> None:
         global players
+        global bullets
 
         while True:
             # Accepting clients
@@ -128,7 +173,7 @@ class Main:
                 sock.setblocking(False)
 
                 i = len(players)
-                players.append(Player(0, 0, (0, 0, 0)))
+                players[i] = Player(0, 0, (0, 0, 0))
 
                 c = Client(sock, addr, i)
 
@@ -143,7 +188,31 @@ class Main:
                 try:
                     client.update()
                 except Exception as e:
-                    print("Exception was thrown during listening to messages from clients:\n", e)
+                    print("Exception was thrown while updating clients:\n", e)
+
+            if time.time()-self.lastBulletUpdate >= 1/5:
+                for i in range(len(bullets)):
+                    bullet = bullets[i]
+                    if bullet.active:
+                        # Checking if bullet is within borders of map
+                        if 0 <= bullet.x < 8 and 0 <= bullet.y < 6:
+                            # Checking if bullet hits someone
+                            j: Client
+                            for j in self.clients:
+                                player = players[j.i]
+                                if player.x == bullet.x and player.y == bullet.y:
+                                    # Processing hit
+                                    j.dataToSend.append('bullet_hit')
+                                    bullets[i].active = False
+                            bullet.x += bullet.movX
+                            bullet.y += bullet.movY
+                        else:
+                            bullets[i].active = False
+
+                for bullet in bullets:
+                    if not bullet.active: bullets.remove(bullet)
+
+                self.lastBulletUpdate = time.time()
 
             if len(self.clients) > 0:
                 time.sleep(1/(80*len(self.clients)))
