@@ -1,7 +1,18 @@
+import traceback
 import pygame
 import socket
 import random
 import time
+
+
+BLOCK_W = 80
+BLOCK_H = 80
+
+MAP_W = 16
+MAP_H = 8
+
+SCREEN_W = MAP_W*BLOCK_W
+SCREEN_H = (MAP_H+1)*BLOCK_H
 
 
 class Player:
@@ -61,6 +72,7 @@ class Client:
         global players
         global health
         global bullets
+        global level
 
         bullets.clear()
 
@@ -77,10 +89,14 @@ class Client:
                                            eval(s[7])))
                         elif s[0] == 'p':
                             players[int(s[1])] = Player(int(s[2]), int(s[3]), eval(s[4]), eval(s[5]))
+                        elif s[0] == 'cb':
+                            level[int(s[1]), int(s[2])] = s[3]
+
                         elif s[0] == 'bullet_hit':
                             health -= 10
         except Exception as e:
             print("Client.update() exc2:\n", e)
+            traceback.print_exc()
 
         try:
             self.sendMessage('get_objects')
@@ -97,10 +113,14 @@ class Client:
                                                   eval(s[7])))
                         elif s[0] == 'p':
                             players[int(s[1])] = Player(int(s[2]), int(s[3]), eval(s[4]), eval(s[5]))
+                        elif s[0] == 'cb':
+                            level[int(s[1]), int(s[2])] = s[3]
+
                         elif s[0] == 'bullet_hit':
                             health -= 10
         except Exception as e:
             print("Client.update() exc:\n", e)
+            traceback.print_exc()
 
     def getMessages(self) -> list:
         try:
@@ -136,11 +156,12 @@ class Main:
     def __init__(self, sip, sport):
         pygame.init()
 
-        self.sc = pygame.display.set_mode((640, 480))
+        self.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H))
 
         self.textures = {
             'grass': pygame.image.load('textures/grass.png').convert_alpha(),
-            'wall': pygame.image.load('textures/wall.png').convert_alpha()
+            'wall': pygame.image.load('textures/wall.png').convert_alpha(),
+            'wood': pygame.image.load('textures/wood.png').convert_alpha()
         }
 
         self.font = pygame.font.SysFont("Arial", 36)
@@ -154,6 +175,12 @@ class Main:
 
         self.c = Client(sip, sport)
         self.c.loadLevel()
+
+        self.slots = ['grass', 'wall', 'wood']
+        self.selectedSlot = 0
+
+        # For fps
+        self.prevFrame = time.time()
 
         self.mainLoop()
 
@@ -179,16 +206,27 @@ class Main:
                             if level[self.x-1, self.y] == 'grass':
                                 self.x -= 1
                     if e.key == pygame.K_s:
-                        if self.y < 5:
+                        if self.y < MAP_H-1:
                             if level[self.x, self.y+1] == 'grass':
                                 self.y += 1
                     if e.key == pygame.K_d:
-                        if self.x < 7:
+                        if self.x < MAP_W-1:
                             if level[self.x+1, self.y] == 'grass':
                                 self.x += 1
 
                     if e.key == pygame.K_SPACE:
                         self.c.sendMessage('shoot'+str(self.x)+'/'+str(self.y+1)+'/0/1/(0,0,0)')
+
+                    if e.key == pygame.K_q or e.key == pygame.K_LEFT:
+                        if self.selectedSlot > 0:
+                            self.selectedSlot -= 1
+                        else:
+                            self.selectedSlot = len(self.slots)-1
+                    if e.key == pygame.K_e or e.key == pygame.K_RIGHT:
+                        if self.selectedSlot < len(self.slots)-1:
+                            self.selectedSlot += 1
+                        else:
+                            self.selectedSlot = 0
 
                     if e.key == pygame.K_r and self.c.disconnected:
                         RECONNECTING = True
@@ -197,62 +235,92 @@ class Main:
             self.sc.fill((255, 255, 255))
 
             if health > 0:
-                for x in range(8):
-                    for y in range(6):
+                for x in range(MAP_W):
+                    for y in range(MAP_H):
                         self.sc.blit(self.textures[level[x, y]],
-                                     self.textures[level[x, y]].get_rect(topleft=(x*80, y*80)))
+                                     self.textures[level[x, y]].get_rect(topleft=(x*BLOCK_W, y*BLOCK_H)))
 
                 for bullet in bullets:
                     if bullet.active:
-                        pygame.draw.rect(self.sc, bullet.color, (bullet.x*80+20, bullet.y*80+20, 40, 40))
+                        pygame.draw.rect(self.sc, bullet.color, (bullet.x*BLOCK_W+(BLOCK_W//4),
+                                                                 bullet.y*BLOCK_H+(BLOCK_H//4),
+                                                                 40, 40))
 
                 for p in players:
                     player = players[p]
                     if player.active:
-                        pygame.draw.rect(self.sc, player.color, (player.x*80, player.y*80, 80, 80))
+                        pygame.draw.rect(self.sc, player.color, (player.x*BLOCK_W, player.y*BLOCK_H,
+                                                                 BLOCK_W, BLOCK_H))
 
-                pygame.draw.rect(self.sc, self.color, (self.x * 80, self.y * 80, 80, 80))
+                pygame.draw.rect(self.sc, self.color, (self.x * BLOCK_W, self.y * BLOCK_H, BLOCK_W, BLOCK_H))
+
+                pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H*BLOCK_H], [MAP_W*BLOCK_W, MAP_H*BLOCK_H])
+
+                for slot in range(len(self.slots)):
+                    if slot == self.selectedSlot:
+                        self.sc.blit(self.textures[self.slots[slot]],
+                                     self.textures[self.slots[slot]].get_rect(topleft=(slot*BLOCK_W, MAP_H*BLOCK_H)))
+                    else:
+                        t = pygame.transform.scale(self.textures[self.slots[slot]], (BLOCK_W//2, BLOCK_H//2))
+                        r = t.get_rect(center=(slot*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+BLOCK_H//2))
+                        self.sc.blit(t, r)
 
                 t = self.font.render("Your health: " + str(health), True, (0, 0, 0))
                 r = t.get_rect(topleft=(0, 0))
                 self.sc.blit(t, r)
 
+                t = self.font.render("FPS: " + str(1/(time.time()-self.prevFrame)), True, (0, 0, 0))
+                r = t.get_rect(topleft=(0, BLOCK_H))
+                self.sc.blit(t, r)
+
                 mouse = pygame.mouse.get_pos()
                 x, y = mouse[0], mouse[1]
 
-                pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0]-10, mouse[1]-10, 20, 20))
+                pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0]-10, mouse[1]-10, BLOCK_W//4, BLOCK_H//4))
 
-                if pygame.mouse.get_pressed(3)[0]:
+                pressed = pygame.mouse.get_pressed(3)
+                if pressed[0] or pressed[2]:
                     movX = 0
                     movY = 0
 
-                    if x//80 < self.x:
+                    if x//BLOCK_W < self.x:
                         movX = -1
-                    elif x//80 == self.x:
+                    elif x//BLOCK_W == self.x:
                         movX = 0
-                    elif x//80 > self.x:
+                    elif x//BLOCK_W > self.x:
                         movX = 1
 
-                    if y//80 < self.y:
+                    if y//BLOCK_H < self.y:
                         movY = -1
-                    elif y//80 == self.y:
+                    elif y//BLOCK_H == self.y:
                         movY = 0
-                    elif y//80 > self.y:
+                    elif y//BLOCK_H > self.y:
                         movY = 1
 
+                    # For block placing
+                    resX = self.x+movX
+                    resY = self.y+movY
+
                     if not (movX == 0 and movY == 0):
-                        self.c.sendMessage('shoot' + str(self.x+movX) + '/' + str(self.y+movY)
-                                           + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
+                        if pressed[0]:
+                            self.c.sendMessage('shoot' + str(self.x+movX) + '/' + str(self.y+movY)
+                                               + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
+                        elif pressed[2]:
+                            if 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
+                                self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
+                                                   self.slots[self.selectedSlot])
 
             elif health == 0:
                 self.c.disconnect()
                 t = self.font.render("Game over!", True, (255, 0, 0))
-                r = t.get_rect(center=(320, 240))
+                r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2))
                 self.sc.blit(t, r)
 
             pygame.display.update()
 
-            time.sleep(1/60)
+            self.prevFrame = time.time()
+
+            # time.sleep(1/60)
 
 
 if __name__ == '__main__':

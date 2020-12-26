@@ -3,6 +3,10 @@ import socket
 import time
 
 
+MAP_W = 16
+MAP_H = 8
+
+
 class Player:
     def __init__(self, x, y, color):
         self.x, self.y, self.color = x, y, color
@@ -25,6 +29,8 @@ bullets: [Bullet]
 level = {}
 level: {(int, int): str}
 
+changedBlocks = []
+
 
 class Client:
     def __init__(self, sock: socket.socket, addr: tuple, i: int):
@@ -42,9 +48,13 @@ class Client:
         self.dataToSend = []
         self.dataToSend: [str]
 
+        self.changedBlocks = []
+
         print("Client #" + str(self.i) + " connected: ", self.a)
 
     def update(self) -> None:
+        global changedBlocks
+
         if not self.disconnected:
             global players
             global bullets
@@ -79,8 +89,13 @@ class Client:
                                         + '/' + str(b.movX) + '/' + str(b.movY)\
                                         + '/' + str(b.color) + '/' + str(b.active) + ';'
 
+                                for block in range(len(self.changedBlocks)):
+                                    b = self.changedBlocks[block]
+                                    m += 'cb/' + str(b[0]) + '/' + str(b[1]) + '/' + b[2] + ';'
+
                                 if m:
                                     self.dataToSend.append(m)
+                                    self.changedBlocks.clear()
                             elif 'set_player' in message:
                                 # print(message)
 
@@ -89,6 +104,12 @@ class Client:
                                 p = Player(int(message[0]), int(message[1]), eval(message[2]))
 
                                 players[self.i] = p
+                            elif 'set_block' in message:
+                                message = message.replace('set_block', '').split('/')
+
+                                level[int(message[0]), int(message[1])] = message[2]
+
+                                changedBlocks.append([int(message[0]), int(message[1]), message[2]])
                             elif 'shoot' in message:
                                 message = message.replace('shoot', '').split('/')
 
@@ -142,13 +163,14 @@ class Main:
         global level
 
         # Generating level
-        for x in range(8):
-            for y in range(6):
-                r = random.randint(0, 9)
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                r = random.randint(0, 7)
                 b = 'grass'
                 if r == 0:
                     b = 'wall'
                 level[x, y] = b
+        level[0, 0] = 'grass'
 
         # Creating socket object
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -185,6 +207,7 @@ class Main:
     def mainLoop(self) -> None:
         global players
         global bullets
+        global level
 
         while True:
             # Accepting clients
@@ -210,13 +233,21 @@ class Main:
                 except Exception as e:
                     print("Exception was thrown while updating clients:\n", e)
 
+            for block in changedBlocks:
+                for client in self.clients:
+                    client.changedBlocks.append(block)
+            changedBlocks.clear()
+
             if time.time()-self.lastBulletUpdate >= 1/5:
                 for i in range(len(bullets)):
                     bullet = bullets[i]
                     if bullet.active:
                         # Checking if bullet is within borders of map
-                        if 0 <= bullet.x < 8 and 0 <= bullet.y < 6 and level[bullet.x, bullet.y] == 'grass':
+                        if 0 <= bullet.x < MAP_W and 0 <= bullet.y < MAP_H and \
+                                level[bullet.x, bullet.y] in ['grass', 'wood']:
                             # Checking if bullet hits someone
+                            hit = False
+
                             j: Client
                             for j in self.clients:
                                 player = players[j.i]
@@ -225,6 +256,15 @@ class Main:
                                     # Processing hit
                                     j.dataToSend.append('bullet_hit')
                                     bullets[i].active = False
+                                    hit = True
+
+                            if not hit and level[bullet.x, bullet.y] == 'wood' and random.randint(0, 9) == 0:
+                                level[bullet.x, bullet.y] = 'grass'
+                                changedBlocks.append([bullet.x, bullet.y, 'grass'])
+                                bullets[i].active = False
+                            elif not level[bullet.x, bullet.y] == 'grass':
+                                bullets[i].active = False
+
                             bullet.x += bullet.movX
                             bullet.y += bullet.movY
                         else:
