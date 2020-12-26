@@ -22,17 +22,40 @@ players: {int: Player}
 bullets = []
 bullets: [Bullet]
 
+level = {}
+level: {(int, int): str}
+
 health = 100
+
+RECONNECTING = False
 
 
 class Client:
-    def __init__(self):
+    def __init__(self, sip, sport):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        self.s.connect((input("Server ip: "), int(input("Server port: "))))
+        self.s.connect((sip, sport))
         self.s.setblocking(False)
 
         self.disconnected = False
+
+    def loadLevel(self):
+        global level
+
+        received = False
+        while not received:
+            self.sendMessage('get_level')
+            time.sleep(1/10)
+            m = self.getMessages()
+            for msg in m:
+                if 'map' in msg:
+                    msg = msg.replace('map', '')
+                    try:
+                        level = eval(msg)
+                        received = True
+                        print("Level loaded.")
+                    except Exception as e:
+                        print("Error while trying to load level:", e)
 
     def update(self):
         global players
@@ -110,12 +133,15 @@ class Client:
 
 
 class Main:
-    def __init__(self):
-        self.c = Client()
-
+    def __init__(self, sip, sport):
         pygame.init()
 
         self.sc = pygame.display.set_mode((640, 480))
+
+        self.textures = {
+            'grass': pygame.image.load('textures/grass.png').convert_alpha(),
+            'wall': pygame.image.load('textures/wall.png').convert_alpha()
+        }
 
         self.font = pygame.font.SysFont("Arial", 36)
 
@@ -124,10 +150,17 @@ class Main:
                       random.randint(0, 255),
                       random.randint(0, 255))
 
+        self.running = True
+
+        self.c = Client(sip, sport)
+        self.c.loadLevel()
+
         self.mainLoop()
 
     def mainLoop(self):
-        while True:
+        global RECONNECTING
+
+        while self.running:
             self.c.sendMessage('set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.color))
 
             self.c.update()
@@ -138,30 +171,47 @@ class Main:
                     exit()
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_w:
-                        self.y -= 1
+                        if self.y > 0:
+                            if level[self.x, self.y-1] == 'grass':
+                                self.y -= 1
                     if e.key == pygame.K_a:
-                        self.x -= 1
+                        if self.x > 0:
+                            if level[self.x-1, self.y] == 'grass':
+                                self.x -= 1
                     if e.key == pygame.K_s:
-                        self.y += 1
+                        if self.y < 5:
+                            if level[self.x, self.y+1] == 'grass':
+                                self.y += 1
                     if e.key == pygame.K_d:
-                        self.x += 1
+                        if self.x < 7:
+                            if level[self.x+1, self.y] == 'grass':
+                                self.x += 1
 
                     if e.key == pygame.K_SPACE:
                         self.c.sendMessage('shoot'+str(self.x)+'/'+str(self.y+1)+'/0/1/(0,0,0)')
 
+                    if e.key == pygame.K_r and self.c.disconnected:
+                        RECONNECTING = True
+                        self.running = False
+
             self.sc.fill((255, 255, 255))
 
             if health > 0:
-                pygame.draw.rect(self.sc, self.color, (self.x*80, self.y*80, 80, 80))
+                for x in range(8):
+                    for y in range(6):
+                        self.sc.blit(self.textures[level[x, y]],
+                                     self.textures[level[x, y]].get_rect(topleft=(x*80, y*80)))
+
+                for bullet in bullets:
+                    if bullet.active:
+                        pygame.draw.rect(self.sc, bullet.color, (bullet.x*80+20, bullet.y*80+20, 40, 40))
 
                 for p in players:
                     player = players[p]
                     if player.active:
                         pygame.draw.rect(self.sc, player.color, (player.x*80, player.y*80, 80, 80))
 
-                for bullet in bullets:
-                    if bullet.active:
-                        pygame.draw.rect(self.sc, bullet.color, (bullet.x*80+20, bullet.y*80+20, 40, 40))
+                pygame.draw.rect(self.sc, self.color, (self.x * 80, self.y * 80, 80, 80))
 
                 t = self.font.render("Your health: " + str(health), True, (0, 0, 0))
                 r = t.get_rect(topleft=(0, 0))
@@ -206,4 +256,20 @@ class Main:
 
 
 if __name__ == '__main__':
-    main = Main()
+    ip = input("Server ip: ")
+    port = int(input("Server port: "))
+
+    a = 1
+
+    while RECONNECTING or a == 1:
+        a = 0
+        main = Main(ip, port)
+        pygame.display.quit()
+
+        players = {}
+        players: {int: Player}
+
+        bullets = []
+        bullets: [Bullet]
+
+        health = 100

@@ -1,3 +1,4 @@
+import random
 import socket
 import time
 
@@ -9,7 +10,8 @@ class Player:
 
 
 class Bullet:
-    def __init__(self, x, y, movX, movY, color):
+    def __init__(self, x, y, movX, movY, color, owner):
+        self.owner = owner
         self.x, self.y, self.movX, self.movY, self.color = x, y, movX, movY, color
         self.active = False
 
@@ -19,6 +21,9 @@ players: {int: Player}
 
 bullets = []
 bullets: [Bullet]
+
+level = {}
+level: {(int, int): str}
 
 
 class Client:
@@ -56,6 +61,9 @@ class Client:
                                 self.s.close()
                                 print("Client #" + str(self.i) + " disconnected: ", self.a)
 
+                            elif message == 'get_level':
+                                self.dataToSend.append('map' + str(level))
+
                             elif message == 'get_objects':
                                 m = ''
 
@@ -85,7 +93,8 @@ class Client:
                                 message = message.replace('shoot', '').split('/')
 
                                 b = Bullet(int(message[0]), int(message[1]),
-                                           int(message[2]), int(message[3]), eval(message[4]))
+                                           int(message[2]), int(message[3]), eval(message[4]),
+                                           self.i)
                                 b.active = True
 
                                 # Checking if there's aren't any bullets that are in the same position as ours
@@ -130,6 +139,17 @@ class Client:
 
 class Main:
     def __init__(self):
+        global level
+
+        # Generating level
+        for x in range(8):
+            for y in range(6):
+                r = random.randint(0, 9)
+                b = 'grass'
+                if r == 0:
+                    b = 'wall'
+                level[x, y] = b
+
         # Creating socket object
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -195,12 +215,13 @@ class Main:
                     bullet = bullets[i]
                     if bullet.active:
                         # Checking if bullet is within borders of map
-                        if 0 <= bullet.x < 8 and 0 <= bullet.y < 6:
+                        if 0 <= bullet.x < 8 and 0 <= bullet.y < 6 and level[bullet.x, bullet.y] == 'grass':
                             # Checking if bullet hits someone
                             j: Client
                             for j in self.clients:
                                 player = players[j.i]
-                                if player.x == bullet.x and player.y == bullet.y:
+                                if player.x == bullet.x and player.y == bullet.y\
+                                        and not (j.i == bullet.owner) and player.active:
                                     # Processing hit
                                     j.dataToSend.append('bullet_hit')
                                     bullets[i].active = False
