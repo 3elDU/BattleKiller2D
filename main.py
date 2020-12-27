@@ -49,6 +49,7 @@ class Client:
         self.s.setblocking(False)
 
         self.disconnected = False
+        self.disconnectReason = ''
 
     def loadLevel(self):
         global level
@@ -94,6 +95,9 @@ class Client:
 
                         elif s[0] == 'bullet_hit':
                             health -= 10
+                        elif s[0] == 'disconnect':
+                            self.disconnectReason = s[1]
+                            self.disconnected = True
         except Exception as e:
             print("Client.update() exc2:\n", e)
             traceback.print_exc()
@@ -118,6 +122,9 @@ class Client:
 
                         elif s[0] == 'bullet_hit':
                             health -= 10
+                        elif s[0] == 'disconnect':
+                            self.disconnectReason = s[1]
+                            self.disconnected = True
         except Exception as e:
             print("Client.update() exc:\n", e)
             traceback.print_exc()
@@ -156,9 +163,23 @@ class Main:
     def __init__(self, sip, sport):
         pygame.init()
 
+        try:
+            f = open('client_settings.txt', 'r')
+            self.settings = eval(f.read())
+            f.close()
+
+            f = open('localizations.txt', 'r')
+            self.localization = eval(f.read())[self.settings['localization']]
+            f.close()
+        except:
+            print("Error while trying to read localization or settings:")
+            traceback.print_exc()
+            exit(1)
+
         self.fullscreen = False
 
         self.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+        pygame.display.set_caption("BattleKiller 2D")
 
         self.textures = {
             'grass': pygame.image.load('textures/grass.png').convert_alpha(),
@@ -175,8 +196,23 @@ class Main:
 
         self.running = True
 
-        self.c = Client(sip, sport)
-        self.c.loadLevel()
+        self.connectionError = False
+        self.connectionErrorTraceback = ''
+
+        try:
+            self.c = Client(sip, sport)
+            self.c.loadLevel()
+        except:
+            self.connectionError = True
+            f = open('last_err_code.txt', 'w')
+            traceback.print_exc(16384, f)
+            f.close()
+
+            f = open('last_err_code.txt', 'r')
+            err = f.read()
+            f.close()
+
+            self.connectionErrorTraceback = err
 
         self.slots = ['grass', 'wall', 'wood']
         self.selectedSlot = 0
@@ -191,15 +227,16 @@ class Main:
         global RECONNECTING
 
         while self.running:
-            self.c.sendMessage('set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.color))
+            if not self.connectionError:
+                self.c.sendMessage('set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.color))
 
-            self.c.update()
+                self.c.update()
 
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     self.c.disconnect()
                     exit()
-                elif e.type == pygame.KEYDOWN:
+                elif e.type == pygame.KEYDOWN and not self.connectionError:
                     if e.key == pygame.K_w:
                         if self.y > 0:
                             if level[self.x, self.y-1] == 'grass':
@@ -243,95 +280,118 @@ class Main:
                     if e.key == pygame.K_r and self.c.disconnected:
                         RECONNECTING = True
                         self.running = False
+                elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_r:
+                        RECONNECTING = True
+                        self.running = False
 
             self.sc.fill((255, 255, 255))
 
-            if health > 0:
-                for x in range(MAP_W):
-                    for y in range(MAP_H):
-                        self.sc.blit(self.textures[level[x, y]],
-                                     self.textures[level[x, y]].get_rect(topleft=(x*BLOCK_W, y*BLOCK_H)))
+            if not self.connectionError:
+                if health > 0 and not self.c.disconnected:
+                    for x in range(MAP_W):
+                        for y in range(MAP_H):
+                            self.sc.blit(self.textures[level[x, y]],
+                                         self.textures[level[x, y]].get_rect(topleft=(x*BLOCK_W, y*BLOCK_H)))
 
-                for bullet in bullets:
-                    if bullet.active:
-                        pygame.draw.rect(self.sc, bullet.color, (bullet.x*BLOCK_W+(BLOCK_W//4),
-                                                                 bullet.y*BLOCK_H+(BLOCK_H//4),
-                                                                 40, 40))
+                    for bullet in bullets:
+                        if bullet.active:
+                            pygame.draw.rect(self.sc, bullet.color, (bullet.x*BLOCK_W+(BLOCK_W//4),
+                                                                     bullet.y*BLOCK_H+(BLOCK_H//4),
+                                                                     40, 40))
 
-                for p in players:
-                    player = players[p]
-                    if player.active:
-                        pygame.draw.rect(self.sc, player.color, (player.x*BLOCK_W, player.y*BLOCK_H,
-                                                                 BLOCK_W, BLOCK_H))
+                    for p in players:
+                        player = players[p]
+                        if player.active:
+                            pygame.draw.rect(self.sc, player.color, (player.x*BLOCK_W, player.y*BLOCK_H,
+                                                                     BLOCK_W, BLOCK_H))
 
-                pygame.draw.rect(self.sc, self.color, (self.x * BLOCK_W, self.y * BLOCK_H, BLOCK_W, BLOCK_H))
+                    pygame.draw.rect(self.sc, self.color, (self.x * BLOCK_W, self.y * BLOCK_H, BLOCK_W, BLOCK_H))
 
-                pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H*BLOCK_H], [MAP_W*BLOCK_W, MAP_H*BLOCK_H])
+                    pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H*BLOCK_H], [MAP_W*BLOCK_W, MAP_H*BLOCK_H])
+                    pygame.draw.rect(self.sc, (255, 255, 255), (0, MAP_H*BLOCK_W, SCREEN_W, BLOCK_H))
 
-                for slot in range(len(self.slots)):
-                    if slot == self.selectedSlot:
-                        self.sc.blit(self.textures[self.slots[slot]],
-                                     self.textures[self.slots[slot]].get_rect(topleft=(slot*BLOCK_W, MAP_H*BLOCK_H)))
-                    else:
-                        t = pygame.transform.scale(self.textures[self.slots[slot]], (BLOCK_W//2, BLOCK_H//2))
-                        r = t.get_rect(center=(slot*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+BLOCK_H//2))
-                        self.sc.blit(t, r)
+                    for slot in range(len(self.slots)):
+                        if slot == self.selectedSlot:
+                            self.sc.blit(self.textures[self.slots[slot]],
+                                         self.textures[self.slots[slot]].get_rect(topleft=(slot*BLOCK_W, MAP_H*BLOCK_H)))
+                        else:
+                            t = pygame.transform.scale(self.textures[self.slots[slot]], (BLOCK_W//2, BLOCK_H//2))
+                            r = t.get_rect(center=(slot*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+BLOCK_H//2))
+                            self.sc.blit(t, r)
 
-                t = self.font.render("Your health: " + str(health), True, (0, 0, 0))
-                r = t.get_rect(topleft=(0, 0))
-                self.sc.blit(t, r)
+                    t = self.font.render(self.localization['health'] + str(health), True, (0, 0, 0))
+                    r = t.get_rect(topleft=(0, 0))
+                    self.sc.blit(t, r)
 
-                t = self.font.render("FPS: " + str(self.fps), True, (0, 0, 0))
-                r = t.get_rect(topleft=(0, BLOCK_H))
-                self.sc.blit(t, r)
+                    t = self.font.render("FPS: " + str(self.fps), True, (0, 0, 0))
+                    r = t.get_rect(topleft=(0, BLOCK_H))
+                    self.sc.blit(t, r)
 
-                mouse = pygame.mouse.get_pos()
-                x, y = mouse[0], mouse[1]
+                    mouse = pygame.mouse.get_pos()
+                    x, y = mouse[0], mouse[1]
 
-                pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0]-10, mouse[1]-10, BLOCK_W//4, BLOCK_H//4))
+                    pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0]-10, mouse[1]-10, BLOCK_W//4, BLOCK_H//4))
 
-                pressed = pygame.mouse.get_pressed(3)
-                if pressed[0] or pressed[2]:
-                    movX = 0
-                    movY = 0
-
-                    if x//BLOCK_W < self.x:
-                        movX = -1
-                    elif x//BLOCK_W == self.x:
+                    pressed = pygame.mouse.get_pressed(3)
+                    if pressed[0] or pressed[2]:
                         movX = 0
-                    elif x//BLOCK_W > self.x:
-                        movX = 1
-
-                    if y//BLOCK_H < self.y:
-                        movY = -1
-                    elif y//BLOCK_H == self.y:
                         movY = 0
-                    elif y//BLOCK_H > self.y:
-                        movY = 1
 
-                    # For block placing
-                    resX = self.x+movX
-                    resY = self.y+movY
+                        if x//BLOCK_W < self.x:
+                            movX = -1
+                        elif x//BLOCK_W == self.x:
+                            movX = 0
+                        elif x//BLOCK_W > self.x:
+                            movX = 1
 
-                    if not (movX == 0 and movY == 0):
-                        if pressed[0]:
-                            self.c.sendMessage('shoot' + str(self.x+movX) + '/' + str(self.y+movY)
-                                               + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
-                        elif pressed[2]:
-                            if 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
-                                self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
-                                                   self.slots[self.selectedSlot])
+                        if y//BLOCK_H < self.y:
+                            movY = -1
+                        elif y//BLOCK_H == self.y:
+                            movY = 0
+                        elif y//BLOCK_H > self.y:
+                            movY = 1
 
-            elif health == 0:
-                self.c.disconnect()
-                t = self.font.render("Game over!", True, (255, 0, 0))
-                r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2))
-                self.sc.blit(t, r)
+                        # For block placing
+                        resX = self.x+movX
+                        resY = self.y+movY
+
+                        if not (movX == 0 and movY == 0):
+                            if pressed[0]:
+                                self.c.sendMessage('shoot' + str(self.x+movX) + '/' + str(self.y+movY)
+                                                   + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
+                            elif pressed[2]:
+                                if 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
+                                    self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
+                                                       self.slots[self.selectedSlot])
+
+                elif health == 0:
+                    self.c.disconnect()
+                    t = self.font.render(self.localization['game_over'], True, (255, 0, 0))
+                    r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2))
+                    self.sc.blit(t, r)
+                else:
+                    t = self.font.render(self.localization['disconnected'], True, (0, 0, 0))
+                    t1 = self.font.render(
+                        self.localization['disconnected_reason'] + self.c.disconnectReason + "'", True, (0, 0, 0))
+                    self.sc.blit(t, t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H)))
+                    self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + BLOCK_H)))
+            else:
+                t = self.font.render(self.localization['server_connection_error'], True, (255, 0, 0))
+                self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
+
+                err = self.connectionErrorTraceback.split('\n')
+                for line in range(len(err)):
+                    t1 = self.font.render(err[line], True, (0, 0, 0))
+                    self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + (line*38))))
+
+                t2 = self.font.render(self.localization['try_connect_again'], True, (20, 141, 192))
+                self.sc.blit(t2, t2.get_rect(center=(SCREEN_W//2, SCREEN_H//2 + ((len(err)+1)*38))))
 
             pygame.display.update()
 
             v = 1/80
-            print(v)
+            # print(v)
             if v > 0:
                 time.sleep(v)
 
@@ -341,8 +401,12 @@ class Main:
 
 
 if __name__ == '__main__':
-    ip = input("Server ip: ")
-    port = int(input("Server port: "))
+    f = open('client_settings.txt', 'r')
+    c = eval(f.read())
+    f.close()
+
+    ip = c['server_ip']
+    port = int(c['server_port'])
 
     a = 1
 

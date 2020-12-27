@@ -1,0 +1,19 @@
+{
+'ru': {
+    'server_connection_error': 'Ошибка при подключении к серверу',
+    'try_connect_again': 'Нажмите R, что-бы попробовать снова',
+    'disconnected': 'Вы были отключены от сервера!',
+    'disconnected_reason': 'Причина: ',
+    'game_over': 'Вы проиграли!',
+    'health': 'Здоровье: '
+    },
+
+'en': {
+    'server_connection_error': 'Error whilst connecting to the server',
+    'try_connect_again': 'Press R to try again',
+    'disconnected': "You've been disconnected from the server!",
+    'disconnected_reason': 'Reason: ',
+    'game_over': 'Game Over!',
+    'health': 'Health: '
+    }
+}
