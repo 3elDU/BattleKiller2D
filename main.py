@@ -27,6 +27,11 @@ class Bullet:
         self.active = active
 
 
+class Item:
+    def __init__(self, name, texture, count):
+        self.name, self.texture, self.count = name, texture, count
+
+
 players = {}
 players: {int: Player}
 
@@ -36,9 +41,43 @@ bullets: [Bullet]
 level = {}
 level: {(int, int): str}
 
+inventoryItems = []
+inventoryItems: [Item]
+
 health = 100
 
 RECONNECTING = False
+
+
+class InventoryManager:
+    @staticmethod
+    def addInventoryItem(item: Item):
+        global inventoryItems
+
+        i: Item
+        for i in inventoryItems:
+            if i.name == item.name:
+                i.count += item.count
+                return
+
+        inventoryItems.append(item)
+
+    @staticmethod
+    def removeInventoryItem(item: Item):
+        global inventoryItems
+        global main
+
+        i: Item
+        for i in inventoryItems:
+            if i.name == item.name and i.count >= item.count:
+                i.count -= item.count
+
+                if i.count == 0:
+                    inventoryItems.remove(i)
+                    if main.selectedSlot-1 >= len(inventoryItems):
+                        main.selectedSlot -= 1
+
+                return
 
 
 class Client:
@@ -164,13 +203,13 @@ class Main:
         pygame.init()
 
         try:
-            f = open('client_settings.txt', 'r')
-            self.settings = eval(f.read())
-            f.close()
+            file = open('client_settings.txt', 'r')
+            self.settings = eval(file.read())
+            file.close()
 
-            f = open('localizations.txt', 'r')
-            self.localization = eval(f.read())[self.settings['localization']]
-            f.close()
+            file = open('localizations.txt', 'r')
+            self.localization = eval(file.read())[self.settings['localization']]
+            file.close()
         except:
             print("Error while trying to read localization or settings:")
             traceback.print_exc()
@@ -184,7 +223,9 @@ class Main:
         self.textures = {
             'grass': pygame.image.load('textures/grass.png').convert_alpha(),
             'wall': pygame.image.load('textures/wall.png').convert_alpha(),
-            'wood': pygame.image.load('textures/wood.png').convert_alpha()
+            'wood': pygame.image.load('textures/wood.png').convert_alpha(),
+            'cross': pygame.image.load('textures/cross.png').convert_alpha(),
+            'tree': pygame.image.load('textures/tree.png').convert_alpha()
         }
 
         self.font = pygame.font.SysFont("Arial", 36)
@@ -204,27 +245,27 @@ class Main:
             self.c.loadLevel()
         except:
             self.connectionError = True
-            f = open('last_err_code.txt', 'w')
-            traceback.print_exc(16384, f)
-            f.close()
+            file = open('last_err_code.txt', 'w')
+            traceback.print_exc(16384, file)
+            file.close()
 
-            f = open('last_err_code.txt', 'r')
-            err = f.read()
-            f.close()
+            file = open('last_err_code.txt', 'r')
+            err = file.read()
+            file.close()
 
             self.connectionErrorTraceback = err
 
-        self.slots = ['grass', 'wall', 'wood']
+        # for inventory
+        # by the way, 0 slot is breaking block mode
         self.selectedSlot = 0
 
         # For fps
         self.prevFrame = time.time()
         self.fps = 1
 
-        self.mainLoop()
-
     def mainLoop(self):
         global RECONNECTING
+        global inventoryItems
 
         while self.running:
             if not self.connectionError:
@@ -261,9 +302,9 @@ class Main:
                         if self.selectedSlot > 0:
                             self.selectedSlot -= 1
                         else:
-                            self.selectedSlot = len(self.slots)-1
+                            self.selectedSlot = len(inventoryItems)
                     if e.key == pygame.K_e or e.key == pygame.K_RIGHT:
-                        if self.selectedSlot < len(self.slots)-1:
+                        if self.selectedSlot < len(inventoryItems):
                             self.selectedSlot += 1
                         else:
                             self.selectedSlot = 0
@@ -280,6 +321,63 @@ class Main:
                     if e.key == pygame.K_r and self.c.disconnected:
                         RECONNECTING = True
                         self.running = False
+                elif e.type == pygame.MOUSEBUTTONDOWN and not self.connectionError:
+                    mouse = pygame.mouse.get_pos()
+                    x, y = mouse[0], mouse[1]
+
+                    pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
+
+                    pressed = pygame.mouse.get_pressed(3)
+                    if pressed[0] or pressed[2]:
+                        movX = 0
+                        movY = 0
+
+                        if x // BLOCK_W < self.x:
+                            movX = -1
+                        elif x // BLOCK_W == self.x:
+                            movX = 0
+                        elif x // BLOCK_W > self.x:
+                            movX = 1
+
+                        if y // BLOCK_H < self.y:
+                            movY = -1
+                        elif y // BLOCK_H == self.y:
+                            movY = 0
+                        elif y // BLOCK_H > self.y:
+                            movY = 1
+
+                        # For block placing
+                        resX = self.x + movX
+                        resY = self.y + movY
+
+                        if not (movX == 0 and movY == 0):
+                            if pressed[0]:
+                                self.c.sendMessage('shoot' + str(self.x + movX) + '/' + str(self.y + movY)
+                                                   + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
+                            elif pressed[2]:
+                                if 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
+                                    if self.selectedSlot > 0 and level[resX, resY] == 'grass' and inventoryItems[self.selectedSlot-1].count > 0:
+                                        self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
+                                                           inventoryItems[self.selectedSlot-1].name)
+
+                                        InventoryManager.removeInventoryItem(Item(inventoryItems[self.selectedSlot-1].name,
+                                                                                  '',
+                                                                                  1))
+                                    elif level[resX, resY] != 'grass':
+
+                                        item = Item('', '', 1)
+
+                                        if level[resX, resY] == 'tree':
+                                            item.name = 'wood'
+                                            item.count = 4
+                                        else:
+                                            item.name = level[resX, resY]
+
+                                        InventoryManager.addInventoryItem(item)
+
+                                        self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
+                                                           'grass')
+
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_r:
                         RECONNECTING = True
@@ -311,14 +409,25 @@ class Main:
                     pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H*BLOCK_H], [MAP_W*BLOCK_W, MAP_H*BLOCK_H])
                     pygame.draw.rect(self.sc, (255, 255, 255), (0, MAP_H*BLOCK_W, SCREEN_W, BLOCK_H))
 
-                    for slot in range(len(self.slots)):
-                        if slot == self.selectedSlot:
-                            self.sc.blit(self.textures[self.slots[slot]],
-                                         self.textures[self.slots[slot]].get_rect(topleft=(slot*BLOCK_W, MAP_H*BLOCK_H)))
+                    if self.selectedSlot == 0:
+                        self.sc.blit(self.textures['cross'], self.textures['cross'].get_rect(
+                            topleft=(0, MAP_H*BLOCK_H)
+                        ))
+                    else:
+                        s = pygame.transform.scale(self.textures['cross'], (BLOCK_W//2, BLOCK_H//2))
+                        self.sc.blit(s, s.get_rect(topleft=(BLOCK_W//4, MAP_H*BLOCK_H+(BLOCK_H//4))))
+
+                    for slot in range(len(inventoryItems)):
+                        if slot == self.selectedSlot-1:
+                            self.sc.blit(self.textures[inventoryItems[slot].name],
+                                         self.textures[inventoryItems[slot].name].get_rect(topleft=((slot+1)*BLOCK_W, MAP_H*BLOCK_H)))
                         else:
-                            t = pygame.transform.scale(self.textures[self.slots[slot]], (BLOCK_W//2, BLOCK_H//2))
-                            r = t.get_rect(center=(slot*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+BLOCK_H//2))
+                            t = pygame.transform.scale(self.textures[inventoryItems[slot].name], (BLOCK_W//2, BLOCK_H//2))
+                            r = t.get_rect(center=((slot+1)*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+BLOCK_H//2))
                             self.sc.blit(t, r)
+                        t = self.font.render(str(inventoryItems[slot].count), True, (0, 0, 0))
+                        r = t.get_rect(center=((slot+1)*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+18))
+                        self.sc.blit(t, r)
 
                     t = self.font.render(self.localization['health'] + str(health), True, (0, 0, 0))
                     r = t.get_rect(topleft=(0, 0))
@@ -329,41 +438,7 @@ class Main:
                     self.sc.blit(t, r)
 
                     mouse = pygame.mouse.get_pos()
-                    x, y = mouse[0], mouse[1]
-
-                    pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0]-10, mouse[1]-10, BLOCK_W//4, BLOCK_H//4))
-
-                    pressed = pygame.mouse.get_pressed(3)
-                    if pressed[0] or pressed[2]:
-                        movX = 0
-                        movY = 0
-
-                        if x//BLOCK_W < self.x:
-                            movX = -1
-                        elif x//BLOCK_W == self.x:
-                            movX = 0
-                        elif x//BLOCK_W > self.x:
-                            movX = 1
-
-                        if y//BLOCK_H < self.y:
-                            movY = -1
-                        elif y//BLOCK_H == self.y:
-                            movY = 0
-                        elif y//BLOCK_H > self.y:
-                            movY = 1
-
-                        # For block placing
-                        resX = self.x+movX
-                        resY = self.y+movY
-
-                        if not (movX == 0 and movY == 0):
-                            if pressed[0]:
-                                self.c.sendMessage('shoot' + str(self.x+movX) + '/' + str(self.y+movY)
-                                                   + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
-                            elif pressed[2]:
-                                if 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
-                                    self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
-                                                       self.slots[self.selectedSlot])
+                    pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
 
                 elif health == 0:
                     self.c.disconnect()
@@ -412,7 +487,10 @@ if __name__ == '__main__':
 
     while RECONNECTING or a == 1:
         a = 0
+
         main = Main(ip, port)
+        main.mainLoop()
+
         pygame.display.quit()
 
         players = {}

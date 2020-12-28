@@ -180,6 +180,8 @@ class Main:
                 b = 'grass'
                 if r == 0:
                     b = 'wall'
+                if r == 1:
+                    b = 'tree'
                 level[x, y] = b
         level[0, 0] = 'grass'
 
