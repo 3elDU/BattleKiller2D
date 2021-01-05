@@ -5,7 +5,8 @@
     'disconnected': 'Вы были отключены от сервера!',
     'disconnected_reason': 'Причина: ',
     'game_over': 'Вы проиграли!',
-    'health': 'Здоровье: '
+    'health': 'Здоровье: ',
+    'selectclass': 'Выберите класс игрока:'
     },
 
 'en': {
@@ -14,6 +15,7 @@
     'disconnected': "You've been disconnected from the server!",
     'disconnected_reason': 'Reason: ',
     'game_over': 'Game Over!',
-    'health': 'Health: '
+    'health': 'Health: ',
+    'selectclass': 'Select your player class:'
     }
 }

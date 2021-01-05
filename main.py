@@ -16,9 +16,15 @@ SCREEN_H = (MAP_H+1)*BLOCK_H
 
 
 class Player:
-    def __init__(self, x, y, color, active):
-        self.x, self.y, self.color = x, y, color
+    def __init__(self, x, y, texture, active):
+        self.x, self.y, self.texture = x, y, texture
         self.active = active
+
+
+class Object:
+    def __init__(self, x, y, texture):
+        self.x, self.y, self.texture = x, y, texture
+        self.active = True
 
 
 class Bullet:
@@ -30,6 +36,101 @@ class Bullet:
 class Item:
     def __init__(self, name, texture, count):
         self.name, self.texture, self.count = name, texture, count
+        self.specialItem = False
+
+    def use(self, bx, by, ox, oy):
+        pass
+
+    def attack(self, bx, by, ox, oy):
+        pass
+
+
+class Pickaxe(Item):
+    def __init__(self):
+        super().__init__('pickaxe', '', 1)
+        self.specialItem = True
+        InventoryManager.addInventoryItem(self)
+
+    def use(self, bx, by, ox, oy):
+        global level
+        if not level[bx, by] == 'grass':
+            InventoryManager.addInventoryItem(Item(level[bx, by], '', 1))
+        level[bx, by] = 'grass'
+        main.c.sendMessage('set_block'+str(bx)+'/'+str(by)+'/grass')
+
+
+class Hammer(Item):
+    def __init__(self):
+        super().__init__('hammer', '', 1)
+        self.specialItem = True
+        InventoryManager.addInventoryItem(self)
+
+    def use(self, bx, by, ox, oy):
+        global level
+        level[bx, by] = 'wood'
+        main.c.sendMessage('set_block' + str(bx) + '/' + str(by) + '/wood')
+
+    def attack(self, bx, by, ox, oy):
+        hit = None
+        for player in players:
+            if players[player].x == bx and players[player].y == by:
+                hit = player
+        if hit is not None:
+            print("I'm attacking!")
+            msg = 'attack'+str(hit)+'/'+str(random.randint(5, 20))
+            print(msg)
+            main.c.sendMessage(msg)
+
+
+class MagicStick(Item):
+    def __init__(self):
+        super().__init__('magic_stick', '', 1)
+        self.specialItem = True
+        InventoryManager.addInventoryItem(self)
+
+    def use(self, bx, by, ox, oy):
+        b = random.choice(['wall', 'grass', 'wood'])
+        if b != 'grass':
+            MapManager.setBlock(ox, oy, b)
+
+
+class Candle(Item):
+    def __init__(self):
+        super().__init__('candle', '', 1)
+        self.specialItem = True
+        InventoryManager.addInventoryItem(self)
+
+    def use(self, bx, by, ox, oy):
+        if (ox*BLOCK_W, oy*BLOCK_H) in objects:
+            if not objects[ox*BLOCK_W, oy*BLOCK_H].active:
+                MapManager.createObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
+            else:
+                print("removing")
+                MapManager.removeObject(ox*BLOCK_W, oy*BLOCK_H, 'fire')
+        else:
+            MapManager.createObject(ox*BLOCK_W, oy*BLOCK_H, 'fire')
+
+
+class Weapon:
+    def __init__(self, maxAmmo, shootingSpeed, shootingDamage, bulletColor):
+        self.ammo = maxAmmo
+        self.maxAmmo = maxAmmo
+
+        self.shootingSpeed = shootingSpeed
+        self.shootingDamage = shootingDamage
+
+        self.bulletColor = bulletColor
+
+
+class PlayerClass:
+    def __init__(self, weapon, texture, className):
+        self.weapon = weapon
+
+        self.instruments = []
+        self.instruments: [Item]
+
+        self.texture = texture
+        self.className = className
 
 
 players = {}
@@ -38,11 +139,16 @@ players: {int: Player}
 bullets = []
 bullets: [Bullet]
 
+objects = {}
+objects: {(int, int): Object}
+
 level = {}
 level: {(int, int): str}
 
 inventoryItems = []
 inventoryItems: [Item]
+
+nextFrameUpdate = False
 
 health = 100
 
@@ -74,16 +180,49 @@ class InventoryManager:
 
                 if i.count == 0:
                     inventoryItems.remove(i)
-                    if main.selectedSlot-1 >= len(inventoryItems):
+                    if main.selectedSlot >= len(inventoryItems):
                         main.selectedSlot -= 1
 
                 return
+
+    @staticmethod
+    def isItemInInventory(name: str) -> bool:
+        global inventoryItems
+        global main
+
+        i: Item
+        for i in inventoryItems:
+            if i.name == name: return True
+
+        return False
+
+
+class MapManager:
+    @staticmethod
+    def setBlock(x, y, block):
+        global level
+
+        level[x, y] = block
+        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(block))
+
+    @staticmethod
+    def createObject(x, y, texture):
+        global objects
+
+        objects[x, y] = Object(x, y, texture)
+        main.c.sendMessage('create_object' + str(x) + '/' + str(y) + '/' + texture)
+
+    @staticmethod
+    def removeObject(x, y, texture):
+        main.c.sendMessage('remove_object' + str(x) + '/' + str(y) + '/' + texture)
+        objects[x, y].active = False
 
 
 class Client:
     def __init__(self, sip, sport):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
+        print("Connecting to server at", sip, sport)
         self.s.connect((sip, sport))
         self.s.setblocking(False)
 
@@ -113,64 +252,78 @@ class Client:
         global health
         global bullets
         global level
+        global objects
+        global nextFrameUpdate
 
-        bullets.clear()
+        msg = ''
+        if not nextFrameUpdate:
+            bullets.clear()
 
-        try:
-            msg = self.getMessages()
+            try:
+                msg = self.getMessages()
 
-            if msg:
-                for obj in msg:
-                    if obj:
-                        s = obj.split('/')
-                        if s[0] == 'b':
-                            # print(s)
-                            bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
-                                           eval(s[7])))
-                        elif s[0] == 'p':
-                            players[int(s[1])] = Player(int(s[2]), int(s[3]), eval(s[4]), eval(s[5]))
-                        elif s[0] == 'cb':
-                            level[int(s[1]), int(s[2])] = s[3]
+                if msg:
+                    for obj in msg:
+                        if obj:
+                            s = obj.split('/')
+                            if s[0] == 'b':
+                                # print(s)
+                                bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
+                                               eval(s[7])))
+                            elif s[0] == 'p':
+                                players[int(s[1])] = Player(int(s[2]), int(s[3]), s[4], eval(s[5]))
+                            elif s[0] == 'cb':
+                                level[int(s[1]), int(s[2])] = s[3]
+                            elif s[0] == 'o':
+                                objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
+                                objects[int(s[1]), int(s[2])].active = eval(s[4])
 
-                        elif s[0] == 'bullet_hit':
-                            health -= 10
-                        elif s[0] == 'disconnect':
-                            self.disconnectReason = s[1]
-                            self.disconnected = True
-        except Exception as e:
-            print("Client.update() exc2:\n", e)
-            traceback.print_exc()
+                            elif s[0] == 'bullet_hit':
+                                health -= int(s[1])
+                            elif s[0] == 'disconnect':
+                                self.disconnectReason = s[1]
+                                self.disconnected = True
+            except Exception as e:
+                print("Client.update() exc2:\n", e)
+                traceback.print_exc()
+                print(msg)
 
-        try:
-            self.sendMessage('get_objects')
-            objects = self.getMessages()
+            try:
+                self.sendMessage('get_objects')
+                msg = self.getMessages()
 
-            if objects:
+                if msg:
 
-                for obj in objects:
-                    if obj:
-                        s = obj.split('/')
-                        if s[0] == 'b':
-                            # print(s)
-                            bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
-                                                  eval(s[7])))
-                        elif s[0] == 'p':
-                            players[int(s[1])] = Player(int(s[2]), int(s[3]), eval(s[4]), eval(s[5]))
-                        elif s[0] == 'cb':
-                            level[int(s[1]), int(s[2])] = s[3]
+                    for obj in msg:
+                        if obj:
+                            s = obj.split('/')
+                            if s[0] == 'b':
+                                # print(s)
+                                bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
+                                                      eval(s[7])))
+                            elif s[0] == 'p':
+                                players[int(s[1])] = Player(int(s[2]), int(s[3]), s[4], eval(s[5]))
+                            elif s[0] == 'cb':
+                                level[int(s[1]), int(s[2])] = s[3]
+                            elif s[0] == 'o':
+                                objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
+                                objects[int(s[1]), int(s[2])].active = eval(s[4])
 
-                        elif s[0] == 'bullet_hit':
-                            health -= 10
-                        elif s[0] == 'disconnect':
-                            self.disconnectReason = s[1]
-                            self.disconnected = True
-        except Exception as e:
-            print("Client.update() exc:\n", e)
-            traceback.print_exc()
+                            elif s[0] == 'bullet_hit':
+                                health -= int(s[1])
+                            elif s[0] == 'disconnect':
+                                self.disconnectReason = s[1]
+                                self.disconnected = True
+            except Exception as e:
+                print("Client.update() exc:\n", e)
+                traceback.print_exc()
+                print(msg)
+        else:
+            nextFrameUpdate = True
 
     def getMessages(self) -> list:
         try:
-            message = self.s.recv(16384).decode('utf-8')
+            message = self.s.recv(1048576).decode('utf-8')
             if message == '':
                 return []
             else:
@@ -194,11 +347,60 @@ class Client:
 
     def disconnect(self):
         if not self.disconnected:
-            self.sendMessage('disconnect')
-            self.disconnected = True
+            r = (False, None)
+            while r != (True, None):
+                r = self.sendMessage('disconnect')
+                self.disconnected = True
 
 
 class Main:
+    def classChooser(self) -> [str, str, [Item]]:
+        # [className, classTexture, defaultItems: [Item]]
+        classes = [
+            ['builder', 'builder_texture', [Hammer, Pickaxe]],
+            ['mage', 'mage_texture', [MagicStick, Candle]]
+        ]
+
+        choosed = False
+        variant = 0
+        while not choosed:
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    exit()
+                elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_LEFT:
+                        if variant > 0:
+                            variant -= 1
+                        else:
+                            variant = len(classes)-1
+                    if e.key == pygame.K_RIGHT:
+                        if variant < len(classes)-1:
+                            variant += 1
+                        else:
+                            variant = 0
+                    if e.key == pygame.K_RETURN:
+                        choosed = True
+
+            self.sc.fill((255, 255, 255))
+
+            t = self.font.render(self.localization['selectclass'], True, (0, 0, 0))
+            self.sc.blit(t, t.get_rect(topleft=(BLOCK_W, SCREEN_H//4)))
+
+            for x in range(len(classes)):
+                if x == variant:
+                    t = self.textures[classes[x][0]]
+                    r = t.get_rect(center=(BLOCK_W+x*BLOCK_W+BLOCK_W//2, SCREEN_H//2))
+                    self.sc.blit(t, r)
+                else:
+                    t = pygame.transform.scale(self.textures[classes[x][0]], (BLOCK_W//2, BLOCK_H//2))
+                    r = t.get_rect(center=(BLOCK_W+x*BLOCK_W+BLOCK_W//2, SCREEN_H//2))
+                    self.sc.blit(t, r)
+
+            pygame.display.update()
+
+        classes[variant][2][1]()
+        return PlayerClass(classes[variant][2][0](), classes[variant][1], classes[variant][0])
+
     def __init__(self, sip, sport):
         pygame.init()
 
@@ -225,15 +427,24 @@ class Main:
             'wall': pygame.image.load('textures/wall.png').convert_alpha(),
             'wood': pygame.image.load('textures/wood.png').convert_alpha(),
             'cross': pygame.image.load('textures/cross.png').convert_alpha(),
-            'tree': pygame.image.load('textures/tree.png').convert_alpha()
+            'tree': pygame.image.load('textures/tree.png').convert_alpha(),
+            'builder': pygame.image.load('textures/builder.png').convert_alpha(),
+            'mage': pygame.image.load('textures/mage.png').convert_alpha(),
+            'builder_texture': pygame.image.load('textures/builder_texture.png').convert_alpha(),
+            'mage_texture': pygame.image.load('textures/mage_texture.png').convert_alpha(),
+            'pickaxe': pygame.image.load('textures/pickaxe.png').convert_alpha(),
+            'hammer': pygame.image.load('textures/hammer.png').convert_alpha(),
+            'magic_stick': pygame.image.load('textures/magic_stick.png').convert_alpha(),
+            'candle': pygame.image.load('textures/candle.png').convert_alpha(),
+            'fire': pygame.image.load('textures/fire.png').convert_alpha()
         }
 
         self.font = pygame.font.SysFont("Arial", 36)
 
+        self.playerClass: PlayerClass
+        self.playerClass = self.classChooser()
+
         self.x, self.y = 0, 0
-        self.color = (random.randint(0, 255),
-                      random.randint(0, 255),
-                      random.randint(0, 255))
 
         self.running = True
 
@@ -255,8 +466,6 @@ class Main:
 
             self.connectionErrorTraceback = err
 
-        # for inventory
-        # by the way, 0 slot is breaking block mode
         self.selectedSlot = 0
 
         # For fps
@@ -266,10 +475,11 @@ class Main:
     def mainLoop(self):
         global RECONNECTING
         global inventoryItems
+        global objects
 
         while self.running:
             if not self.connectionError:
-                self.c.sendMessage('set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.color))
+                self.c.sendMessage('set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.playerClass.texture))
 
                 self.c.update()
 
@@ -302,9 +512,9 @@ class Main:
                         if self.selectedSlot > 0:
                             self.selectedSlot -= 1
                         else:
-                            self.selectedSlot = len(inventoryItems)
+                            self.selectedSlot = len(inventoryItems)-1
                     if e.key == pygame.K_e or e.key == pygame.K_RIGHT:
-                        if self.selectedSlot < len(inventoryItems):
+                        if self.selectedSlot < len(inventoryItems)-1:
                             self.selectedSlot += 1
                         else:
                             self.selectedSlot = 0
@@ -325,58 +535,49 @@ class Main:
                     mouse = pygame.mouse.get_pos()
                     x, y = mouse[0], mouse[1]
 
-                    pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
+                    if x < MAP_W*BLOCK_W and y < MAP_H*BLOCK_H:
+                        pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
 
-                    pressed = pygame.mouse.get_pressed(3)
-                    if pressed[0] or pressed[2]:
-                        movX = 0
-                        movY = 0
-
-                        if x // BLOCK_W < self.x:
-                            movX = -1
-                        elif x // BLOCK_W == self.x:
+                        pressed = pygame.mouse.get_pressed(3)
+                        if pressed[0] or pressed[2]:
                             movX = 0
-                        elif x // BLOCK_W > self.x:
-                            movX = 1
-
-                        if y // BLOCK_H < self.y:
-                            movY = -1
-                        elif y // BLOCK_H == self.y:
                             movY = 0
-                        elif y // BLOCK_H > self.y:
-                            movY = 1
 
-                        # For block placing
-                        resX = self.x + movX
-                        resY = self.y + movY
+                            if x // BLOCK_W < self.x:
+                                movX = -1
+                            elif x // BLOCK_W == self.x:
+                                movX = 0
+                            elif x // BLOCK_W > self.x:
+                                movX = 1
 
-                        if not (movX == 0 and movY == 0):
-                            if pressed[0]:
-                                self.c.sendMessage('shoot' + str(self.x + movX) + '/' + str(self.y + movY)
-                                                   + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
-                            elif pressed[2]:
-                                if 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
-                                    if self.selectedSlot > 0 and level[resX, resY] == 'grass' and inventoryItems[self.selectedSlot-1].count > 0:
-                                        self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
-                                                           inventoryItems[self.selectedSlot-1].name)
+                            if y // BLOCK_H < self.y:
+                                movY = -1
+                            elif y // BLOCK_H == self.y:
+                                movY = 0
+                            elif y // BLOCK_H > self.y:
+                                movY = 1
 
-                                        InventoryManager.removeInventoryItem(Item(inventoryItems[self.selectedSlot-1].name,
-                                                                                  '',
-                                                                                  1))
-                                    elif level[resX, resY] != 'grass':
+                            # For block placing
+                            resX = self.x + movX
+                            resY = self.y + movY
 
-                                        item = Item('', '', 1)
+                            if not (movX == 0 and movY == 0) and 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
+                                if pressed[0]:
+                                    inventoryItems[self.selectedSlot].attack(resX, resY, x//BLOCK_W, y//BLOCK_H)
 
-                                        if level[resX, resY] == 'tree':
-                                            item.name = 'wood'
-                                            item.count = 4
-                                        else:
-                                            item.name = level[resX, resY]
+                                    # self.c.sendMessage('shoot' + str(self.x + movX) + '/' + str(self.y + movY)
+                                    #                    + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
+                                elif pressed[2]:
+                                    if not inventoryItems[self.selectedSlot].specialItem:
+                                        if level[resX, resY] == 'grass' and inventoryItems[self.selectedSlot].count > 0:
+                                            self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
+                                                               inventoryItems[self.selectedSlot].name)
 
-                                        InventoryManager.addInventoryItem(item)
-
-                                        self.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
-                                                           'grass')
+                                            InventoryManager.removeInventoryItem(Item(inventoryItems[self.selectedSlot].name,
+                                                                                      '',
+                                                                                      1))
+                                    else:
+                                        inventoryItems[self.selectedSlot].use(resX, resY, x//BLOCK_W, y//BLOCK_H)
 
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_r:
@@ -398,36 +599,39 @@ class Main:
                                                                      bullet.y*BLOCK_H+(BLOCK_H//4),
                                                                      40, 40))
 
+                    for obj in objects:
+                        if objects[obj].active:
+                            self.sc.blit(self.textures[objects[obj].texture],
+                                         self.textures[objects[obj].texture].get_rect(
+                                             topleft=(objects[obj].x, objects[obj].y)))
+
                     for p in players:
                         player = players[p]
                         if player.active:
-                            pygame.draw.rect(self.sc, player.color, (player.x*BLOCK_W, player.y*BLOCK_H,
-                                                                     BLOCK_W, BLOCK_H))
+                            self.sc.blit(self.textures[player.texture],
+                                         self.textures[player.texture].get_rect(topleft=(player.x*BLOCK_W,
+                                                                                         player.y*BLOCK_H)))
 
-                    pygame.draw.rect(self.sc, self.color, (self.x * BLOCK_W, self.y * BLOCK_H, BLOCK_W, BLOCK_H))
+                    self.sc.blit(self.textures[self.playerClass.texture], self.textures[self.playerClass.texture].get_rect(
+                        topleft=(self.x*BLOCK_W, self.y*BLOCK_H)
+                    ))
 
                     pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H*BLOCK_H], [MAP_W*BLOCK_W, MAP_H*BLOCK_H])
                     pygame.draw.rect(self.sc, (255, 255, 255), (0, MAP_H*BLOCK_W, SCREEN_W, BLOCK_H))
 
-                    if self.selectedSlot == 0:
-                        self.sc.blit(self.textures['cross'], self.textures['cross'].get_rect(
-                            topleft=(0, MAP_H*BLOCK_H)
-                        ))
-                    else:
-                        s = pygame.transform.scale(self.textures['cross'], (BLOCK_W//2, BLOCK_H//2))
-                        self.sc.blit(s, s.get_rect(topleft=(BLOCK_W//4, MAP_H*BLOCK_H+(BLOCK_H//4))))
-
                     for slot in range(len(inventoryItems)):
-                        if slot == self.selectedSlot-1:
+                        if slot == self.selectedSlot:
                             self.sc.blit(self.textures[inventoryItems[slot].name],
-                                         self.textures[inventoryItems[slot].name].get_rect(topleft=((slot+1)*BLOCK_W, MAP_H*BLOCK_H)))
+                                         self.textures[inventoryItems[slot].name].get_rect(topleft=(slot*BLOCK_W, MAP_H*BLOCK_H)))
                         else:
                             t = pygame.transform.scale(self.textures[inventoryItems[slot].name], (BLOCK_W//2, BLOCK_H//2))
-                            r = t.get_rect(center=((slot+1)*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+BLOCK_H//2))
+                            r = t.get_rect(center=(slot*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+BLOCK_H//2))
                             self.sc.blit(t, r)
-                        t = self.font.render(str(inventoryItems[slot].count), True, (0, 0, 0))
-                        r = t.get_rect(center=((slot+1)*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+18))
-                        self.sc.blit(t, r)
+
+                        if not inventoryItems[slot].specialItem:
+                            t = self.font.render(str(inventoryItems[slot].count), True, (0, 0, 0))
+                            r = t.get_rect(center=(slot*BLOCK_W+BLOCK_W//2, MAP_H*BLOCK_H+18))
+                            self.sc.blit(t, r)
 
                     t = self.font.render(self.localization['health'] + str(health), True, (0, 0, 0))
                     r = t.get_rect(topleft=(0, 0))
@@ -440,7 +644,7 @@ class Main:
                     mouse = pygame.mouse.get_pos()
                     pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
 
-                elif health == 0:
+                elif health <= 0:
                     self.c.disconnect()
                     t = self.font.render(self.localization['game_over'], True, (255, 0, 0))
                     r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2))
@@ -448,7 +652,7 @@ class Main:
                 else:
                     t = self.font.render(self.localization['disconnected'], True, (0, 0, 0))
                     t1 = self.font.render(
-                        self.localization['disconnected_reason'] + self.c.disconnectReason + "'", True, (0, 0, 0))
+                        self.localization['disconnected_reason'] + self.c.disconnectReason, True, (0, 0, 0))
                     self.sc.blit(t, t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H)))
                     self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + BLOCK_H)))
             else:
@@ -465,7 +669,7 @@ class Main:
 
             pygame.display.update()
 
-            v = 1/80
+            v = 1/160
             # print(v)
             if v > 0:
                 time.sleep(v)
@@ -498,5 +702,16 @@ if __name__ == '__main__':
 
         bullets = []
         bullets: [Bullet]
+
+        objects = {}
+        objects: {(int, int): Object}
+
+        level = {}
+        level: {(int, int): str}
+
+        inventoryItems = []
+        inventoryItems: [Item]
+
+        nextFrameUpdate = False
 
         health = 100
