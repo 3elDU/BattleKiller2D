@@ -8,9 +8,10 @@ MAP_H = 8
 
 
 class Player:
-    def __init__(self, x, y, texture):
+    def __init__(self, x, y, texture, health):
         self.x, self.y, self.texture = x, y, texture
         self.active = True
+        self.health = health
 
 
 class Object:
@@ -42,6 +43,7 @@ changedBlocks = []
 changedObjects = []
 
 playersDamaged = []
+playersLeft = []
 
 
 class Client:
@@ -63,10 +65,15 @@ class Client:
         self.changedBlocks = []
         self.changedObjects = []
 
+        self.playersLeft = []
+
+        self.lastAliveMessage = time.time()
+
         print("Client #" + str(self.i) + " connected: ", self.a)
 
     def update(self) -> None:
         global changedBlocks
+        global playersLeft
         global objects
         global players
         global bullets
@@ -74,12 +81,17 @@ class Client:
         if not self.disconnected:
             try:
                 msg = self.s.recv(1048576).decode('utf-8')
+                # print(self.i, msg)
 
                 for message in msg.split(';'):
                     if message:
-                        if message == 'disconnect':
+                        if message == 'alive':
+                            self.lastAliveMessage = time.time()
+
+                        elif message == 'disconnect':
                             self.disconnected = True
                             players[self.i].active = False
+                            playersLeft.append(self.i)
                             self.s.close()
                             print("Client #" + str(self.i) + " disconnected: ", self.a)
 
@@ -89,11 +101,14 @@ class Client:
                         elif message == 'get_objects':
                             m = ''
 
+                            for p in range(len(self.playersLeft)):
+                                m += 'p/' + str(self.playersLeft[p]) + '/0/0/mage/False/0;'
+
                             for p in range(len(players)):
-                                if p != self.i:
+                                if p != self.i and players[p].active:
                                     player = players[p]
                                     m += 'p/' + str(p) + '/' + str(player.x) + '/' + str(player.y) \
-                                         + '/' + str(player.texture) + '/' + str(player.active) + ';'
+                                         + '/' + str(player.texture) + '/' + str(player.active) + '/' + str(player.health) + ';'
 
                             for bullet in range(len(bullets)):
                                 b = bullets[bullet]
@@ -108,16 +123,19 @@ class Client:
                             for b in self.changedObjects:
                                 m += 'o/' + str(b[0]) + '/' + str(b[1]) + '/' + str(b[2]) + '/' + str(b[3]) + ';'
 
-                            if m:
-                                self.dataToSend.append(m)
-                                self.changedBlocks.clear()
-                                self.changedObjects.clear()
+                            if m == '':
+                                m = 'nothing'
+
+                            self.dataToSend.append(m)
+                            self.changedBlocks.clear()
+                            self.changedObjects.clear()
+                            self.playersLeft.clear()
                         elif 'set_player' in message:
                             # print(message)
 
                             message = message.replace('set_player', '').split('/')
 
-                            p = Player(int(message[0]), int(message[1]), message[2])
+                            p = Player(int(message[0]), int(message[1]), message[2], int(message[3]))
 
                             players[self.i] = p
                         elif 'set_block' in message:
@@ -163,6 +181,21 @@ class Client:
 
                         else:
                             if message: print("Message from client:", message)
+
+                if time.time()-self.lastAliveMessage >= 10:
+                    print("Client #"+str(self.i)+" has been not responding for 10 seconds! Disconnecting him/her.")
+
+                    try:
+                        self.disconnect(reason='Timed out.')
+                    except Exception as e:
+                        print("Error while trying to send disconnect message:", e)
+
+                    self.disconnected = True
+                    players[self.i].active = False
+                    playersLeft.append(self.i)
+                    self.s.close()
+                    print("Client #" + str(self.i) + " disconnected: ", self.a)
+
             except socket.error:
                 pass
             except Exception as e:
@@ -180,13 +213,23 @@ class Client:
                 """
 
             try:
-                d = len(self.dataToSend) - 1
+                if len(self.dataToSend) > 0:
+                    m = ''
+                    d: str
+                    for d in self.dataToSend:
+                        if not d.endswith(';'):
+                            d += ';'
+                        m += d
 
-                if d >= 0:
-                    self.s.send(self.dataToSend[d].encode('utf-8'))
-                    self.s.send(';'.encode('utf-8'))
+                    # print(m)
 
-                    self.dataToSend.pop(d)
+                    try:
+                        self.s.send(m.encode('utf-8'))
+                        self.dataToSend.clear()
+                    except socket.error:
+                        pass
+                    except Exception as e:
+                        print("Error while sending data to client: ", e)
             except socket.error:
                 pass
             except Exception as e:
@@ -194,11 +237,13 @@ class Client:
         else:
             players[self.i].active = False
 
-    def disconnect(self):
+    def disconnect(self, reason='Server was shut down.'):
         if not self.disconnected:
             try:
                 self.s.setblocking(True)
-                self.s.send('disconnect/Server was shut down.;'.encode('utf-8'))
+
+                msg = 'disconnect/' + reason + ';'
+                self.s.send(msg.encode('utf-8'))
                 self.s.close()
                 self.disconnected = True
             except Exception as e:
@@ -280,7 +325,7 @@ class Main:
                     sock.setblocking(False)
 
                     i = len(players)
-                    players[i] = Player(0, 0, 'grass')
+                    players[i] = Player(0, 0, 'grass', 100)
 
                     c = Client(sock, addr, i)
 
@@ -310,6 +355,11 @@ class Main:
                 for player in playersDamaged:
                     self.clients[player[0]].dataToSend.append('bullet_hit/' + str(player[1]))
                 playersDamaged.clear()
+
+                for player in playersLeft:
+                    for client in self.clients:
+                        client.playersLeft.append(player)
+                playersLeft.clear()
 
                 if time.time() - self.lastBulletUpdate >= 1 / 5:
                     for i in range(len(bullets)):
@@ -349,9 +399,10 @@ class Main:
                     self.lastBulletUpdate = time.time()
 
                 if len(self.clients) > 0:
-                    time.sleep(1 / (80 * len(self.clients)))
+                    time.sleep(1 / (30 * len(self.clients)))
                 else:
                     time.sleep(1 / 60)
+
             except KeyboardInterrupt:
                 print("\nShutting down server.")
                 for client in self.clients:
