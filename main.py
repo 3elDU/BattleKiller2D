@@ -271,8 +271,9 @@ class Client:
                                 objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
                                 objects[int(s[1]), int(s[2])].active = eval(s[4])
                             elif s[0] == 'msg':
-                                print(s)
-                                self.newMessages.append([int(s[1]), str(s[2])])
+                                self.newMessages.append([int(s[1]), str(s[2]), (0, 0, 0)])
+                            elif s[0] == 'service':
+                                self.newMessages.append([0, str(s[1]), (255, 0, 0)])
 
                             elif s[0] == 'bullet_hit':
                                 health -= int(s[1])
@@ -317,10 +318,8 @@ class Client:
 
     def disconnect(self):
         if not self.disconnected:
-            r = (False, None)
-            while r != (True, None):
-                r = self.sendMessage('disconnect')
-                self.disconnected = True
+            r = self.sendMessage('disconnect')
+            self.disconnected = True
 
 
 class ChatMenu:
@@ -353,8 +352,9 @@ class ChatMenu:
                         return
                     elif e.key == pygame.K_RETURN:
                         self.c.sendMessage(self.userMessage)
-                        main.messages.append([main.c.clientId, self.userMessage, time.time(), 255])
-                        self.messages.append([main.c.clientId, self.userMessage])
+                        main.messages.append([main.c.clientId, self.userMessage, time.time(), 255, (0, 0, 0)])
+                        if self.quickMessage:
+                            self.messages.append([main.c.clientId, self.userMessage, (0, 0, 0)])
                         self.userMessage = ''
                         if self.quickMessage and not e.mod & pygame.KMOD_CTRL and not e.mod & pygame.KMOD_SHIFT:
                             return
@@ -375,7 +375,7 @@ class ChatMenu:
                 self.messages = self.messages[len(self.messages)-16::]
 
             for message in range(len(self.messages)):
-                s = self.font.render("Player #"+str(self.messages[message][0])+" : "+self.messages[message][1], True, (50, 50, 50))
+                s = self.font.render("Player #"+str(self.messages[message][0])+" : "+self.messages[message][1], True, self.messages[message][2])
                 if not self.quickMessage:
                     r = s.get_rect(midleft=(BLOCK_W//2, BLOCK_H//2+(message*BLOCK_H//2)))
                 else:
@@ -528,7 +528,7 @@ class Main:
             pass
 
         while self.running:
-            if not self.connectionError:
+            if not self.connectionError and not self.c.disconnected:
                 self.c.sendMessage(
                     'set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.playerClass.texture) + '/' + str(
                         health))
@@ -537,7 +537,7 @@ class Main:
 
                 if self.c.newMessages:
                     for msg in self.c.newMessages:
-                        self.messages.append([msg[0], msg[1], time.time(), 255])
+                        self.messages.append([msg[0], msg[1], time.time(), 255, msg[2]])
                     self.c.newMessages.clear()
 
             # listening for the events
@@ -545,7 +545,7 @@ class Main:
                 if e.type == pygame.QUIT:
                     self.c.disconnect()
                     return
-                elif e.type == pygame.KEYDOWN and not self.connectionError:
+                elif e.type == pygame.KEYDOWN and not self.connectionError and not self.c.disconnected:
                     if e.key == pygame.K_SPACE:
                         self.c.sendMessage('shoot' + str(self.x) + '/' + str(self.y + 1) + '/0/1/(0,0,0)')
 
@@ -634,8 +634,24 @@ class Main:
 
             self.sc.fill((255, 255, 255))
 
-            if not self.connectionError:
+            if self.c.disconnected:
+                t = self.font.render(self.localization['disconnected'], True, (0, 0, 0))
+                t1 = self.font.render(
+                    self.localization['disconnected_reason'] + self.c.disconnectReason, True, (0, 0, 0))
+                self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
+                self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + BLOCK_H)))
+            elif self.connectionError:
+                t = self.font.render(self.localization['server_connection_error'], True, (255, 0, 0))
+                self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
 
+                err = self.connectionErrorTraceback.split('\n')
+                for line in range(len(err)):
+                    t1 = self.font.render(err[line], True, (0, 0, 0))
+                    self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + (line * 38))))
+
+                t2 = self.font.render(self.localization['try_connect_again'], True, (20, 141, 192))
+                self.sc.blit(t2, t2.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + ((len(err) + 1) * 38))))
+            else:
                 # movement
                 if time.time() - self.lastMovement > 1 / 5:  # 1/(blocksPerSecond)
                     keys = pygame.key.get_pressed()
@@ -661,31 +677,13 @@ class Main:
                                 self.x += 1
                                 self.lastMovement = time.time()
 
-                if health > 0 and not self.c.disconnected:
+                if health > 0:
                     self.renderGame()
-
-                elif health <= 0:
+                else:
                     self.c.disconnect()
                     t = self.font.render(self.localization['game_over'], True, (255, 0, 0))
                     r = t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
                     self.sc.blit(t, r)
-                else:
-                    t = self.font.render(self.localization['disconnected'], True, (0, 0, 0))
-                    t1 = self.font.render(
-                        self.localization['disconnected_reason'] + self.c.disconnectReason, True, (0, 0, 0))
-                    self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
-                    self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + BLOCK_H)))
-            else:
-                t = self.font.render(self.localization['server_connection_error'], True, (255, 0, 0))
-                self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
-
-                err = self.connectionErrorTraceback.split('\n')
-                for line in range(len(err)):
-                    t1 = self.font.render(err[line], True, (0, 0, 0))
-                    self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + (line * 38))))
-
-                t2 = self.font.render(self.localization['try_connect_again'], True, (20, 141, 192))
-                self.sc.blit(t2, t2.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + ((len(err) + 1) * 38))))
 
             pygame.display.update()
 
@@ -770,7 +768,7 @@ class Main:
         self.sc.blit(t, r)
 
         for message in self.messages:
-            t = self.font.render("Player #" + str(message[0]) + " : " + message[1], True, (0, 0, 0))
+            t = self.font.render("Player #" + str(message[0]) + " : " + message[1], True, message[4])
             t.set_alpha(int(message[3]))
             r = t.get_rect(topleft=(0, BLOCK_H // 2 * (2 + self.messages.index(message))))
             self.sc.blit(t, r)

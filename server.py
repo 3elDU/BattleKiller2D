@@ -46,6 +46,9 @@ newMessages = []
 playersDamaged = []
 playersLeft = []
 
+commandsFromClients = []
+serviceMessages = []
+
 
 class Client:
     def __init__(self, sock: socket.socket, addr: tuple, i: int):
@@ -66,6 +69,7 @@ class Client:
         self.changedBlocks = []
         self.changedObjects = []
         self.newMessages = []
+        self.serviceMessages = []
 
         self.playersLeft = []
 
@@ -74,6 +78,7 @@ class Client:
         print("Client #" + str(self.i) + " connected: ", self.a)
 
     def update(self) -> None:
+        global commandsFromClients
         global changedBlocks
         global newMessages
         global playersLeft
@@ -90,6 +95,10 @@ class Client:
                     if message:
                         if message == 'alive':
                             self.lastAliveMessage = time.time()
+
+                        elif '/command' in message:
+                            cmd = message.replace('/command ', '')
+                            commandsFromClients.append([self.i, cmd])
 
                         elif message == 'disconnect':
                             self.disconnected = True
@@ -132,6 +141,9 @@ class Client:
                                 if b[0] != self.i:
                                     m += 'msg/' + str(b[0]) + '/' + str(b[1]) + ';'
 
+                            for b in self.serviceMessages:
+                                m += 'service/'+'Response from the Server: ' + str(b) + ';'
+
                             if m == '':
                                 m = 'nothing'
 
@@ -139,6 +151,7 @@ class Client:
                             self.changedBlocks.clear()
                             self.changedObjects.clear()
                             self.newMessages.clear()
+                            self.serviceMessages.clear()
                             self.playersLeft.clear()
                         elif 'set_player' in message:
                             # print(message)
@@ -250,8 +263,12 @@ class Client:
             players[self.i].active = False
 
     def disconnect(self, reason='Server was shut down.'):
+        global players
         if not self.disconnected:
             try:
+                players[self.i].active = False
+                playersLeft.append(self.i)
+
                 self.s.setblocking(True)
 
                 msg = 'disconnect/' + reason + ';'
@@ -280,6 +297,7 @@ class Main:
 
         # Creating socket object
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         # Reading user's ip and port from settings file
         try:
@@ -323,6 +341,21 @@ class Main:
 
         # Entering main loop
         self.mainLoop()
+
+    def handleCommand(self, command: str) -> str:
+        try:
+            cmd = command.split(' ')
+            if cmd[0] == 'kick':
+                c: Client
+                for c in self.clients:
+                    if c.i == int(cmd[1]):
+                        c.disconnect(reason=''.join([s+' ' for s in cmd[2::]]))
+                        return 'Successfully kicked player #' + str(cmd[1])
+                return 'No player found with id #' + str(cmd[1])
+            else:
+                return 'Unknown command.'
+        except Exception as e:
+            return 'Exception has occurred: ' + str(e)
 
     def mainLoop(self) -> None:
         global players
@@ -377,6 +410,16 @@ class Main:
                     for client in self.clients:
                         client.playersLeft.append(player)
                 playersLeft.clear()
+
+                for command in commandsFromClients:
+                    print(command)
+                    response = self.handleCommand(command[1])
+                    print(response)
+                    for client in self.clients:
+                        if client.i == command[0]:
+                            print(client.i)
+                            client.serviceMessages.append(response)
+                commandsFromClients.clear()
 
                 if time.time() - self.lastBulletUpdate >= 1 / 5:
                     for i in range(len(bullets)):
