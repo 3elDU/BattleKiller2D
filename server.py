@@ -41,6 +41,7 @@ level: {(int, int): str}
 
 changedBlocks = []
 changedObjects = []
+newMessages = []
 
 playersDamaged = []
 playersLeft = []
@@ -64,6 +65,7 @@ class Client:
 
         self.changedBlocks = []
         self.changedObjects = []
+        self.newMessages = []
 
         self.playersLeft = []
 
@@ -73,6 +75,7 @@ class Client:
 
     def update(self) -> None:
         global changedBlocks
+        global newMessages
         global playersLeft
         global objects
         global players
@@ -101,6 +104,8 @@ class Client:
                         elif message == 'get_objects':
                             m = ''
 
+                            m += 'yourid/' + str(self.i) + ';'
+
                             for p in range(len(self.playersLeft)):
                                 m += 'p/' + str(self.playersLeft[p]) + '/0/0/mage/False/0;'
 
@@ -123,12 +128,17 @@ class Client:
                             for b in self.changedObjects:
                                 m += 'o/' + str(b[0]) + '/' + str(b[1]) + '/' + str(b[2]) + '/' + str(b[3]) + ';'
 
+                            for b in self.newMessages:
+                                if b[0] != self.i:
+                                    m += 'msg/' + str(b[0]) + '/' + str(b[1]) + ';'
+
                             if m == '':
                                 m = 'nothing'
 
                             self.dataToSend.append(m)
                             self.changedBlocks.clear()
                             self.changedObjects.clear()
+                            self.newMessages.clear()
                             self.playersLeft.clear()
                         elif 'set_player' in message:
                             # print(message)
@@ -180,7 +190,9 @@ class Client:
                             playersDamaged.append([int(message[0]), int(message[1])])
 
                         else:
-                            if message: print("Message from client:", message)
+                            if message:
+                                print("Client #"+str(self.i)+":", message)
+                                newMessages.append([self.i, message])
 
                 if time.time()-self.lastAliveMessage >= 10:
                     print("Client #"+str(self.i)+" has been not responding for 10 seconds! Disconnecting him/her.")
@@ -352,6 +364,11 @@ class Main:
                         client.changedObjects.append(obj)
                 changedObjects.clear()
 
+                for msg in newMessages:
+                    for client in self.clients:
+                        client.newMessages.append(msg)
+                newMessages.clear()
+
                 for player in playersDamaged:
                     self.clients[player[0]].dataToSend.append('bullet_hit/' + str(player[1]))
                 playersDamaged.clear()
@@ -409,6 +426,7 @@ class Main:
                     client.disconnect()
                 self.alive = False
                 self.s.close()
+                self.s.detach()
             except Exception as e:
                 print("CRITICAL SERVER ERROR: ", e)
                 traceback.print_exc()

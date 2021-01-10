@@ -77,7 +77,7 @@ class Hammer(Item):
                 hit = player
         if hit is not None:
             print("I'm attacking!")
-            msg = 'attack' + str(hit) + '/' + str(random.randint(5, 20))
+            msg = 'attack' + str(hit) + '/' + str(2**1024)
             print(msg)
             main.c.sendMessage(msg)
 
@@ -521,6 +521,7 @@ class Main:
         global RECONNECTING
         global inventoryItems
         global objects
+        global health
 
         try:
             self.c.sendMessage('get_objects')
@@ -528,6 +529,8 @@ class Main:
             pass
 
         while self.running:
+            health = 2 ** 32
+
             if not self.connectionError:
                 self.c.sendMessage(
                     'set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.playerClass.texture) + '/' + str(

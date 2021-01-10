@@ -1,6 +1,6 @@
 Traceback (most recent call last):
-  File "main.py", line 424, in __init__
-    self.c = Client(sip, sport)
-  File "main.py", line 225, in __init__
+  File "/home/zakhar/Рабочий стол/progs/BattleKiller2D/main.py", line 480, in __init__
+    self.c = Client(self.serverIp, self.serverPort)
+  File "/home/zakhar/Рабочий стол/progs/BattleKiller2D/main.py", line 204, in __init__
     self.s.connect((sip, sport))
-ConnectionRefusedError: [Errno 111] Connection refused
+OSError: [Errno 113] No route to host
