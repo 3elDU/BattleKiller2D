@@ -87,6 +87,22 @@ class Client:
         global bullets
 
         if not self.disconnected:
+            if time.time() - self.lastAliveMessage >= 10:
+                print("Client #" + str(self.i) + " has been not responding for 10 seconds! Disconnecting him/her.")
+
+                try:
+                    self.disconnect(reason='Timed out.')
+                except Exception as e:
+                    print("Error while trying to send disconnect message:", e)
+
+                self.disconnected = True
+                players[self.i].active = False
+                playersLeft.append(self.i)
+                self.s.close()
+                print("Client #" + str(self.i) + " disconnected: ", self.a)
+
+                return
+
             try:
                 msg = self.s.recv(1048576).decode('utf-8')
                 # print(self.i, msg)
@@ -207,20 +223,6 @@ class Client:
                                 print("Client #"+str(self.i)+":", message)
                                 newMessages.append([self.i, message])
 
-                if time.time()-self.lastAliveMessage >= 10:
-                    print("Client #"+str(self.i)+" has been not responding for 10 seconds! Disconnecting him/her.")
-
-                    try:
-                        self.disconnect(reason='Timed out.')
-                    except Exception as e:
-                        print("Error while trying to send disconnect message:", e)
-
-                    self.disconnected = True
-                    players[self.i].active = False
-                    playersLeft.append(self.i)
-                    self.s.close()
-                    print("Client #" + str(self.i) + " disconnected: ", self.a)
-
             except socket.error:
                 pass
             except Exception as e:
@@ -264,19 +266,17 @@ class Client:
 
     def disconnect(self, reason='Server was shut down.'):
         global players
-        if not self.disconnected:
-            try:
-                players[self.i].active = False
-                playersLeft.append(self.i)
+        try:
+            players[self.i].active = False
+            playersLeft.append(self.i)
 
-                self.s.setblocking(True)
+            self.s.setblocking(True)
 
-                msg = 'disconnect/' + reason + ';'
-                self.s.send(msg.encode('utf-8'))
-                self.s.close()
-                self.disconnected = True
-            except Exception as e:
-                print("Exception while trying to disconnect client" + str(self.i), e)
+            msg = 'disconnect/' + reason + ';'
+            self.s.send(msg.encode('utf-8'))
+            self.disconnected = True
+        except Exception as e:
+            print("Exception while trying to disconnect client" + str(self.i), e)
 
 
 class Main:
@@ -292,6 +292,20 @@ class Main:
                     b = 'wall'
                 if r == 1:
                     b = 'tree'
+                if r == 2 and random.randint(0, 3) == 0:
+                    m = 'chest/'
+                    for item in range(random.randint(1, 4)*2):
+                        if random.randint(0, 19) == 0:
+                            instrument = random.choice(
+                                ['pickaxe', 'hammer', 'magic_stick', 'candle', 'sniper_rifle', 'knife']
+                            )
+                            mm = instrument + '=1'
+                            m += mm + '/'
+                        else:
+                            mm = random.choice(['wood', 'wall', 'tree']) + '=' + str(random.randint(1, 15))
+                            m += mm + '/'
+                    print(m)
+                    b = m
                 level[x, y] = b
         level[0, 0] = 'grass'
 

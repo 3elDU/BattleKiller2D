@@ -42,7 +42,15 @@ class Item:
         pass
 
     def attack(self, bx, by, ox, oy):
-        pass
+        if level[ox, oy].split('/')[0] == 'chest':
+            items = level[ox, oy].split('/')[1::]
+            itemslist = []
+            for item in items:
+                i = item.split('=')
+                if len(i) == 2:
+                    itemslist.append([i[0], int(i[1])])
+
+            ChestMenu(main.sc, itemslist, ox, oy)
 
 
 class Pickaxe(Item):
@@ -111,6 +119,116 @@ class Candle(Item):
             MapManager.createObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
 
 
+class Knife(Item):
+    def __init__(self):
+        super().__init__('knife', '', 1)
+        self.specialItem = True
+        InventoryManager.addInventoryItem(self)
+
+    def use(self, bx, by, ox, oy):
+        super().attack(bx, by, ox, oy)
+
+    def attack(self, bx, by, ox, oy):
+        hit = None
+        for player in players:
+            if players[player].x == bx and players[player].y == by:
+                hit = player
+        if hit is not None:
+            print("I'm attacking!")
+            msg = 'attack' + str(hit) + '/' + str(random.randint(50, 100))
+            print(msg)
+            main.c.sendMessage(msg)
+
+
+class SniperRifle(Item):
+    def __init__(self):
+        super().__init__('sniper_rifle', '', 1)
+        self.specialItem = True
+        InventoryManager.addInventoryItem(self)
+
+    def use(self, bx, by, ox, oy):
+        super().attack(bx, by, ox, oy)
+
+
+    def attack(self, bx, by, ox, oy):
+        global level
+
+        vertical = False
+
+        try:
+            m = (oy-main.y) / (ox-main.x)
+        except ZeroDivisionError:
+            m = 0
+            vertical = True
+
+        b = main.y - (m * main.x)
+
+        print('x1: ', main.x, 'y1: ', main.y, 'x2: ', ox, 'y2: ', oy)
+        print('m: ', m)
+        print('b: ', b)
+
+        x = main.x
+
+        step = 1
+        if ox > main.x and oy > main.y:
+            step = 1
+        elif ox < main.x or oy > main.y:
+            step = -1
+
+        changedBlocks = []
+
+        if not vertical:
+            for xx in range(main.x*20, ox*20, step):
+                x = xx/20
+
+                y = m * x + b
+
+                if 0 <= int(x) <= MAP_W and 0 <= int(y) <= MAP_H:
+                    if not level[int(x), int(y)] == 'grass':
+                        print(int(x), int(y), level[int(x), int(y)])
+                        return
+
+                if not (int(x), int(y)) in changedBlocks:
+                    changedBlocks.append((int(x), int(y)))
+        else:
+            print("Vertical")
+
+            if main.y > oy:
+                step = -1
+            else:
+                step = 1
+
+            for y in range(main.y, oy, step):
+                print(y)
+                if not level[main.x, y] == 'grass':
+                    print(main.x, y, level[main.x, y])
+                    return
+
+                if not (main.x, y) in changedBlocks:
+                    changedBlocks.append((main.x, y))
+
+        print('Changed blocks: ', len(changedBlocks))
+
+        # for block in changedBlocks:
+        #     print(block[0], block[1])
+        #     level[block[0], block[1]] = 'wood'
+
+        hit = None
+        for player in players:
+            if players[player].x == ox and players[player].y == oy:
+                hit = player
+        if hit is not None:
+            print("I'm attacking!")
+            msg = 'attack' + str(hit) + '/' + str(random.randint(20, 40))
+            print(msg)
+            main.c.sendMessage(msg)
+
+
+specialItemList = {'pickaxe': Pickaxe, 'hammer': Hammer,
+                   'magic_stick': MagicStick, 'candle': Candle,
+                   'knife': Knife, 'sniper_rifle': SniperRifle}
+
+
 class Weapon:
     def __init__(self, maxAmmo, shootingSpeed, shootingDamage, bulletColor):
         self.ammo = maxAmmo
@@ -170,7 +288,8 @@ class InventoryManager:
 
         i: Item
         for i in inventoryItems:
-            if i.name == name: return True
+            if i.name == name:
+                return True
 
         return False
 
@@ -278,6 +397,8 @@ class Client:
                             elif s[0] == 'bullet_hit':
                                 health -= int(s[1])
                             elif s[0] == 'disconnect':
+                                print("Disconnected from the server.")
+                                print(s)
                                 self.disconnectReason = s[1]
                                 self.disconnected = True
 
@@ -318,8 +439,78 @@ class Client:
 
     def disconnect(self):
         if not self.disconnected:
-            r = self.sendMessage('disconnect')
+            self.sendMessage('disconnect')
             self.disconnected = True
+
+
+class ChestMenu:
+    def __init__(self, sc: pygame.Surface, itemsList: list, ox, oy):
+        self.sc = sc
+        self.items = itemsList
+        self.selected = 0
+        self.x, self.y = ox, oy
+
+        self.gray = pygame.Surface((SCREEN_W, SCREEN_H))
+        self.gray.fill((0, 0, 0))
+        self.gray.set_alpha(128)
+
+        self.mainloop()
+
+    def mainloop(self):
+        while True:
+            main.c.update()
+
+            if level[self.x, self.y].split('/')[0] != 'chest':
+                return
+
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    return
+                if e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_ESCAPE:
+                        return
+
+                    elif e.key == pygame.K_LEFT:
+                        if self.selected == 0:
+                            self.selected = len(self.items)-1
+                        else:
+                            self.selected -= 1
+                    elif e.key == pygame.K_RIGHT:
+                        if self.selected == len(self.items)-1:
+                            self.selected = 0
+                        else:
+                            self.selected += 1
+
+                    elif e.key == pygame.K_RETURN or e.key == pygame.K_SPACE:
+                        for item in self.items:
+                            if item[0] in specialItemList and not specialItemList[item[0]] in inventoryItems:
+                                InventoryManager.addInventoryItem(specialItemList[item[0]]())
+                            else:
+                                InventoryManager.addInventoryItem(Item(item[0], item[0], int(item[1])))
+                        MapManager.setBlock(self.x, self.y, 'grass')
+                        return
+
+            main.renderGame()
+            self.sc.blit(self.gray, self.gray.get_rect(topleft=(0, 0)))
+
+            pygame.draw.rect(self.sc, (255, 255, 255), (SCREEN_W//2-len(self.items)//2*BLOCK_W,
+                                                        SCREEN_H//2-BLOCK_H//2,
+                                                        len(self.items)*BLOCK_W,
+                                                        BLOCK_H))
+
+            for item in range(len(self.items)):
+                p = SCREEN_W//2-len(self.items)//2*BLOCK_W + item*BLOCK_W
+                if self.selected != item:
+                    t = pygame.transform.scale(main.textures[self.items[item][0]], (BLOCK_W//2, BLOCK_H//2))
+                else:
+                    t = main.textures[self.items[item][0]]
+                self.sc.blit(t, t.get_rect(center=(p+BLOCK_W//2, SCREEN_H//2)))
+
+                t = main.font.render(str(self.items[item][1]), True, (0, 0, 0))
+                r = t.get_rect(center=(p+BLOCK_W//2, SCREEN_H//2+BLOCK_H//2))
+                self.sc.blit(t, r)
+
+            pygame.display.update()
 
 
 class ChatMenu:
@@ -353,13 +544,12 @@ class ChatMenu:
                     elif e.key == pygame.K_RETURN:
                         self.c.sendMessage(self.userMessage)
                         main.messages.append([main.c.clientId, self.userMessage, time.time(), 255, (0, 0, 0)])
-                        if self.quickMessage:
-                            self.messages.append([main.c.clientId, self.userMessage, (0, 0, 0)])
+                        self.messages.append([main.c.clientId, self.userMessage, (0, 0, 0)])
                         self.userMessage = ''
                         if self.quickMessage and not e.mod & pygame.KMOD_CTRL and not e.mod & pygame.KMOD_SHIFT:
                             return
                     elif e.key == pygame.K_BACKSPACE:
-                        self.userMessage = self.userMessage[:len(self.userMessage)-1]
+                        self.userMessage = self.userMessage[:len(self.userMessage) - 1]
                     else:
                         self.userMessage += e.unicode
 
@@ -369,25 +559,27 @@ class ChatMenu:
                 main.renderGame()
                 self.sc.blit(main.sc, main.sc.get_rect(topleft=(0, 0)))
 
-            pygame.draw.rect(self.sc, (100, 100, 100), (0, SCREEN_H-BLOCK_H, SCREEN_W, BLOCK_H))
+            pygame.draw.rect(self.sc, (100, 100, 100), (0, SCREEN_H - BLOCK_H, SCREEN_W, BLOCK_H))
 
             if len(self.messages) > 16:
-                self.messages = self.messages[len(self.messages)-16::]
+                self.messages = self.messages[len(self.messages) - 16::]
 
             for message in range(len(self.messages)):
-                s = self.font.render("Player #"+str(self.messages[message][0])+" : "+self.messages[message][1], True, self.messages[message][2])
+                s = self.font.render("Player #" + str(self.messages[message][0]) + " : " + self.messages[message][1],
+                                     True, self.messages[message][2])
                 if not self.quickMessage:
-                    r = s.get_rect(midleft=(BLOCK_W//2, BLOCK_H//2+(message*BLOCK_H//2)))
+                    r = s.get_rect(midleft=(BLOCK_W // 2, BLOCK_H // 2 + (message * BLOCK_H // 2)))
                 else:
-                    r = s.get_rect(midleft=(BLOCK_W//2, BLOCK_H+BLOCK_H//2+(message*BLOCK_H//2)))
+                    r = s.get_rect(midleft=(BLOCK_W // 2, BLOCK_H + BLOCK_H // 2 + (message * BLOCK_H // 2)))
                 self.sc.blit(s, r)
 
             s = self.font.render(self.userMessage, True, (0, 0, 0))
-            r = s.get_rect(midleft=(BLOCK_W//2, SCREEN_H-BLOCK_H//2))
+            r = s.get_rect(midleft=(BLOCK_W // 2, SCREEN_H - BLOCK_H // 2))
             self.sc.blit(s, r)
 
             # Text cursor
-            pygame.draw.rect(self.sc, (0, 0, 0), (BLOCK_W//2+s.get_width(), SCREEN_H-BLOCK_H+BLOCK_H//4, BLOCK_W//8, BLOCK_H-BLOCK_W//2))
+            pygame.draw.rect(self.sc, (0, 0, 0), (
+                BLOCK_W // 2 + s.get_width(), SCREEN_H - BLOCK_H + BLOCK_H // 4, BLOCK_W // 8, BLOCK_H - BLOCK_W // 2))
 
             pygame.display.update()
 
@@ -397,7 +589,8 @@ class Main:
         # [className, classTexture, defaultItems: [Item]]
         classes = [
             ['builder', 'builder_texture', [Hammer, Pickaxe]],
-            ['mage', 'mage_texture', [MagicStick, Candle]]
+            ['mage', 'mage_texture', [MagicStick, Candle]],
+            ['sniper', 'sniper_texture', [Knife, SniperRifle]]
         ]
 
         choosed = False
@@ -470,14 +663,19 @@ class Main:
             'tree': pygame.image.load('textures/tree.png').convert_alpha(),
             'builder': pygame.image.load('textures/builder.png').convert_alpha(),
             'mage': pygame.image.load('textures/mage.png').convert_alpha(),
+            'sniper': pygame.image.load('textures/sniper.png').convert_alpha(),
             'builder_texture': pygame.image.load('textures/builder_texture.png').convert_alpha(),
             'mage_texture': pygame.image.load('textures/mage_texture.png').convert_alpha(),
+            'sniper_texture': pygame.image.load('textures/sniper_texture.png').convert_alpha(),
             'pickaxe': pygame.image.load('textures/pickaxe.png').convert_alpha(),
             'hammer': pygame.image.load('textures/hammer.png').convert_alpha(),
             'magic_stick': pygame.image.load('textures/magic_stick.png').convert_alpha(),
             'candle': pygame.image.load('textures/candle.png').convert_alpha(),
+            'knife': pygame.image.load('textures/knife.png').convert_alpha(),
+            'sniper_rifle': pygame.image.load('textures/sniper_rifle.png').convert_alpha(),
             'fire': pygame.image.load('textures/fire.png').convert_alpha(),
-            'arrow': pygame.image.load('textures/arrow.png').convert_alpha()
+            'arrow': pygame.image.load('textures/arrow.png').convert_alpha(),
+            'chest': pygame.image.load('textures/chest.png').convert_alpha()
         }
 
         self.font = pygame.font.SysFont("Arial", 36)
@@ -699,8 +897,8 @@ class Main:
     def renderGame(self):
         for x in range(MAP_W):
             for y in range(MAP_H):
-                self.sc.blit(self.textures[level[x, y]],
-                             self.textures[level[x, y]].get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
+                t = self.textures[level[x, y].split('/')[0]]
+                self.sc.blit(t, t.get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
 
         for bullet in bullets:
             if bullet.active:
@@ -745,11 +943,11 @@ class Main:
 
         for slot in range(len(inventoryItems)):
             if slot == self.selectedSlot:
-                self.sc.blit(self.textures[inventoryItems[slot].name],
-                             self.textures[inventoryItems[slot].name].get_rect(
+                self.sc.blit(self.textures[inventoryItems[slot].name.split('/')[0]],
+                             self.textures[inventoryItems[slot].name.split('/')[0]].get_rect(
                                  topleft=(slot * BLOCK_W, MAP_H * BLOCK_H)))
             else:
-                t = pygame.transform.scale(self.textures[inventoryItems[slot].name],
+                t = pygame.transform.scale(self.textures[inventoryItems[slot].name.split('/')[0]],
                                            (BLOCK_W // 2, BLOCK_H // 2))
                 r = t.get_rect(center=(slot * BLOCK_W + BLOCK_W // 2, MAP_H * BLOCK_H + BLOCK_H // 2))
                 self.sc.blit(t, r)
