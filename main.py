@@ -39,7 +39,18 @@ class Item:
         self.specialItem = False
 
     def use(self, bx, by, ox, oy):
-        pass
+        if level[ox, oy].split('/')[0] == 'chest':
+            items = level[ox, oy].split('/')[1::]
+            itemslist = []
+            for item in items:
+                i = item.split('=')
+                if len(i) == 2:
+                    itemslist.append([i[0], int(i[1])])
+
+            ChestMenu(main.sc, itemslist, ox, oy)
+        elif level[ox, oy] == 'heart':
+            main.defenceLevel += 10
+            MapManager.setBlock(ox, oy, 'grass')
 
     def attack(self, bx, by, ox, oy):
         if level[ox, oy].split('/')[0] == 'chest':
@@ -51,6 +62,9 @@ class Item:
                     itemslist.append([i[0], int(i[1])])
 
             ChestMenu(main.sc, itemslist, ox, oy)
+        elif level[ox, oy] == 'heart':
+            main.defenceLevel += 10
+            MapManager.setBlock(ox, oy, 'grass')
 
 
 class Pickaxe(Item):
@@ -135,7 +149,7 @@ class Knife(Item):
                 hit = player
         if hit is not None:
             print("I'm attacking!")
-            msg = 'attack' + str(hit) + '/' + str(random.randint(50, 100))
+            msg = 'attack' + str(hit) + '/' + str('100')
             print(msg)
             main.c.sendMessage(msg)
 
@@ -148,7 +162,6 @@ class SniperRifle(Item):
 
     def use(self, bx, by, ox, oy):
         super().attack(bx, by, ox, oy)
-
 
     def attack(self, bx, by, ox, oy):
         global level
@@ -166,8 +179,6 @@ class SniperRifle(Item):
         print('x1: ', main.x, 'y1: ', main.y, 'x2: ', ox, 'y2: ', oy)
         print('m: ', m)
         print('b: ', b)
-
-        x = main.x
 
         step = 1
         if ox > main.x and oy > main.y:
@@ -395,7 +406,7 @@ class Client:
                                 self.newMessages.append([0, str(s[1]), (255, 0, 0)])
 
                             elif s[0] == 'bullet_hit':
-                                health -= int(s[1])
+                                health -= int(abs(int(s[1]) - int(s[1])*main.defenceLevel*0.01))
                             elif s[0] == 'disconnect':
                                 print("Disconnected from the server.")
                                 print(s)
@@ -565,8 +576,14 @@ class ChatMenu:
                 self.messages = self.messages[len(self.messages) - 16::]
 
             for message in range(len(self.messages)):
-                s = self.font.render("Player #" + str(self.messages[message][0]) + " : " + self.messages[message][1],
-                                     True, self.messages[message][2])
+                if self.messages[message][2] == (0, 0, 0):
+                    s = self.font.render("Player #" + str(self.messages[message][0]) + " : " + self.messages[message][1],
+                                         True, self.messages[message][2])
+                else:
+                    s = self.font.render(
+                        "[SERVER] " + str(self.messages[message][0]) + " : " + self.messages[message][1],
+                        True, self.messages[message][2])
+
                 if not self.quickMessage:
                     r = s.get_rect(midleft=(BLOCK_W // 2, BLOCK_H // 2 + (message * BLOCK_H // 2)))
                 else:
@@ -675,7 +692,8 @@ class Main:
             'sniper_rifle': pygame.image.load('textures/sniper_rifle.png').convert_alpha(),
             'fire': pygame.image.load('textures/fire.png').convert_alpha(),
             'arrow': pygame.image.load('textures/arrow.png').convert_alpha(),
-            'chest': pygame.image.load('textures/chest.png').convert_alpha()
+            'chest': pygame.image.load('textures/chest.png').convert_alpha(),
+            'heart': pygame.image.load('textures/heart.png').convert_alpha()
         }
 
         self.font = pygame.font.SysFont("Arial", 36)
@@ -714,6 +732,8 @@ class Main:
         # For fps
         self.prevFrame = time.time()
         self.fps = 1
+
+        self.defenceLevel = 0
 
     def mainLoop(self):
         global RECONNECTING
@@ -965,8 +985,16 @@ class Main:
         r = t.get_rect(topleft=(0, BLOCK_H // 2))
         self.sc.blit(t, r)
 
+        t = self.font.render("Defence level: " + str(self.defenceLevel), True, (0, 0, 0))
+        r = t.get_rect(topleft=(4*BLOCK_W, 0))
+        self.sc.blit(t, r)
+
         for message in self.messages:
-            t = self.font.render("Player #" + str(message[0]) + " : " + message[1], True, message[4])
+            if message[4] == (0, 0, 0):
+                t = self.font.render("Player #" + str(message[0]) + " : " + message[1], True, message[4])
+            else:
+                t = self.font.render("[SERVER] " + str(message[0]) + " : " + message[1], True, message[4])
+
             t.set_alpha(int(message[3]))
             r = t.get_rect(topleft=(0, BLOCK_H // 2 * (2 + self.messages.index(message))))
             self.sc.blit(t, r)

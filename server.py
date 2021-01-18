@@ -2,6 +2,7 @@ import random
 import socket
 import time
 import traceback
+from tkinter import *
 
 MAP_W = 16
 MAP_H = 8
@@ -138,7 +139,8 @@ class Client:
                                 if p != self.i and players[p].active:
                                     player = players[p]
                                     m += 'p/' + str(p) + '/' + str(player.x) + '/' + str(player.y) \
-                                         + '/' + str(player.texture) + '/' + str(player.active) + '/' + str(player.health) + ';'
+                                         + '/' + str(player.texture) + '/' + str(player.active) + '/'\
+                                         + str(player.health) + ';'
 
                             for bullet in range(len(bullets)):
                                 b = bullets[bullet]
@@ -306,6 +308,8 @@ class Main:
                             m += mm + '/'
                     print(m)
                     b = m
+                if r == 3 and random.randint(0, 3) == 0:
+                    b = 'heart'
                 level[x, y] = b
         level[0, 0] = 'grass'
 
@@ -315,12 +319,13 @@ class Main:
 
         # Reading user's ip and port from settings file
         try:
-            f = open('server_settings.txt', 'r')
-            self.settings = eval(f.read())
-            f.close()
+            file = open('server_settings.txt', 'r')
+            self.settings = eval(file.read())
+            file.close()
 
             self.ip = self.settings['ip']
-            if self.ip == '': self.ip = socket.gethostbyname(socket.gethostname())
+            if self.ip == '':
+                self.ip = socket.gethostbyname(socket.gethostname())
 
             self.port = self.settings['port']
             if self.port == '':
@@ -350,20 +355,16 @@ class Main:
         self.clients: [Client]
 
         self.lastBulletUpdate = time.time()
-
-        self.alive = True
-
-        # Entering main loop
-        self.mainLoop()
+        self.lastBoostSpawn = time.time()
 
     def handleCommand(self, command: str) -> str:
         try:
             cmd = command.split(' ')
             if cmd[0] == 'kick':
-                c: Client
-                for c in self.clients:
-                    if c.i == int(cmd[1]):
-                        c.disconnect(reason=''.join([s+' ' for s in cmd[2::]]))
+                client: Client
+                for client in self.clients:
+                    if client.i == int(cmd[1]):
+                        client.disconnect(reason=''.join([s + ' ' for s in cmd[2::]]))
                         return 'Successfully kicked player #' + str(cmd[1])
                 return 'No player found with id #' + str(cmd[1])
             else:
@@ -371,128 +372,217 @@ class Main:
         except Exception as e:
             return 'Exception has occurred: ' + str(e)
 
-    def mainLoop(self) -> None:
+    def update(self) -> None:
         global players
         global bullets
         global level
 
-        while self.alive:
+        try:
+            # Accepting clients
             try:
-                # Accepting clients
+                sock, addr = self.s.accept()
+                sock.setblocking(False)
+
+                i = len(players)
+                players[i] = Player(0, 0, 'grass', 100)
+
+                client = Client(sock, addr, i)
+                self.clients.append(client)
+
+            except socket.error:
+                pass
+
+            # Receiving new messages from clients
+            client: Client
+            for client in self.clients:
                 try:
-                    sock, addr = self.s.accept()
-                    sock.setblocking(False)
+                    client.update()
+                except Exception as e:
+                    print("Exception was thrown while updating clients:\n", e)
 
-                    i = len(players)
-                    players[i] = Player(0, 0, 'grass', 100)
-
-                    c = Client(sock, addr, i)
-
-                    self.clients.append(c)
-
-                except socket.error:
-                    pass
-
-                # Receiving new messages from clients
-                client: Client
+            for block in changedBlocks:
                 for client in self.clients:
-                    try:
-                        client.update()
-                    except Exception as e:
-                        print("Exception was thrown while updating clients:\n", e)
+                    client.changedBlocks.append(block)
+            changedBlocks.clear()
 
-                for block in changedBlocks:
-                    for client in self.clients:
-                        client.changedBlocks.append(block)
-                changedBlocks.clear()
+            for obj in changedObjects:
+                for client in self.clients:
+                    client.changedObjects.append(obj)
+            changedObjects.clear()
 
-                for obj in changedObjects:
-                    for client in self.clients:
-                        client.changedObjects.append(obj)
-                changedObjects.clear()
+            for msg in newMessages:
+                for client in self.clients:
+                    client.newMessages.append(msg)
+            newMessages.clear()
 
-                for msg in newMessages:
-                    for client in self.clients:
-                        client.newMessages.append(msg)
-                newMessages.clear()
+            for player in playersDamaged:
+                self.clients[player[0]].dataToSend.append('bullet_hit/' + str(player[1]))
+            playersDamaged.clear()
 
-                for player in playersDamaged:
-                    self.clients[player[0]].dataToSend.append('bullet_hit/' + str(player[1]))
-                playersDamaged.clear()
+            for player in playersLeft:
+                for client in self.clients:
+                    client.playersLeft.append(player)
+            playersLeft.clear()
 
-                for player in playersLeft:
-                    for client in self.clients:
-                        client.playersLeft.append(player)
-                playersLeft.clear()
+            for command in commandsFromClients:
+                print(command)
+                response = self.handleCommand(command[1])
+                print(response)
+                for client in self.clients:
+                    if client.i == command[0]:
+                        print(client.i)
+                        client.serviceMessages.append(response)
+            commandsFromClients.clear()
 
-                for command in commandsFromClients:
-                    print(command)
-                    response = self.handleCommand(command[1])
-                    print(response)
-                    for client in self.clients:
-                        if client.i == command[0]:
-                            print(client.i)
-                            client.serviceMessages.append(response)
-                commandsFromClients.clear()
+            if time.time() - self.lastBoostSpawn >= 30:
+                toSpawn = random.choice(['chest', 'heart'])
+                x, y = random.randint(0, 15), random.randint(0, 7)
+                changedBlocks.append([x, y, toSpawn])
+                level[x, y] = toSpawn
+                print("Spawned")
+                self.lastBoostSpawn = time.time()
 
-                if time.time() - self.lastBulletUpdate >= 1 / 5:
-                    for i in range(len(bullets)):
-                        bullet = bullets[i]
-                        if bullet.active:
-                            # Checking if bullet is within borders of map
-                            if 0 <= bullet.x < MAP_W and 0 <= bullet.y < MAP_H and \
-                                    level[bullet.x, bullet.y] in ['grass', 'wood']:
-                                # Checking if bullet hits someone
-                                hit = False
+            if time.time() - self.lastBulletUpdate >= 1 / 5:
+                for i in range(len(bullets)):
+                    bullet = bullets[i]
+                    if bullet.active:
+                        # Checking if bullet is within borders of map
+                        if 0 <= bullet.x < MAP_W and 0 <= bullet.y < MAP_H and \
+                                level[bullet.x, bullet.y] in ['grass', 'wood']:
+                            # Checking if bullet hits someone
+                            hit = False
 
-                                j: Client
-                                for j in self.clients:
-                                    player = players[j.i]
-                                    if player.x == bullet.x and player.y == bullet.y \
-                                            and not (j.i == bullet.owner) and player.active:
-                                        # Processing hit
-                                        j.dataToSend.append('bullet_hit/10')
-                                        bullets[i].active = False
-                                        hit = True
-
-                                if not hit and level[bullet.x, bullet.y] == 'wood' and random.randint(0, 9) == 0:
-                                    level[bullet.x, bullet.y] = 'grass'
-                                    changedBlocks.append([bullet.x, bullet.y, 'grass'])
+                            j: Client
+                            for j in self.clients:
+                                player = players[j.i]
+                                if player.x == bullet.x and player.y == bullet.y \
+                                        and not (j.i == bullet.owner) and player.active:
+                                    # Processing hit
+                                    j.dataToSend.append('bullet_hit/10')
                                     bullets[i].active = False
-                                elif not level[bullet.x, bullet.y] == 'grass':
-                                    bullets[i].active = False
+                                    hit = True
 
-                                bullet.x += bullet.movX
-                                bullet.y += bullet.movY
-                            else:
+                            if not hit and level[bullet.x, bullet.y] == 'wood' and random.randint(0, 9) == 0:
+                                level[bullet.x, bullet.y] = 'grass'
+                                changedBlocks.append([bullet.x, bullet.y, 'grass'])
+                                bullets[i].active = False
+                            elif not level[bullet.x, bullet.y] == 'grass':
                                 bullets[i].active = False
 
-                    for bullet in bullets:
-                        if not bullet.active: bullets.remove(bullet)
+                            bullet.x += bullet.movX
+                            bullet.y += bullet.movY
+                        else:
+                            bullets[i].active = False
 
-                    self.lastBulletUpdate = time.time()
+                for bullet in bullets:
+                    if not bullet.active:
+                        bullets.remove(bullet)
 
-                if len(self.clients) > 0:
-                    time.sleep(1 / (30 * len(self.clients)))
-                else:
-                    time.sleep(1 / 60)
+                self.lastBulletUpdate = time.time()
 
+            if len(self.clients) > 0:
+                time.sleep(1 / (30 * len(self.clients)))
+            else:
+                time.sleep(1 / 60)
+
+        except Exception as e:
+            print("CRITICAL SERVER ERROR: ", e)
+            traceback.print_exc()
+
+    def shutDown(self):
+        print("\nShutting down server.")
+        for client in self.clients:
+            client.disconnect()
+        self.s.close()
+        self.s.detach()
+
+
+class GUI:
+    def stopServer(self):
+        self.alive = False
+
+    def sendClientMessage(self):
+        if len(self.main.clients) >= int(self.entry1.get()):
+            self.main.clients[int(self.entry1.get())].dataToSend.append('service/'+self.entry2.get())
+
+    def evalMessage(self):
+        self.result['text'] = 'Result: ' + str(exec(self.entry3.get('0.0', END)))
+
+    def __init__(self):
+        self.root = Tk()
+
+        self.main = Main()
+
+        self.button = Button(text="Stop the server.", command=self.stopServer, width=25)
+        self.button.grid(row=0, column=0, padx=10, pady=10)
+
+        self.clientMessageFrame = Frame(self.root)
+
+        self.label1 = Label(self.clientMessageFrame, text="Client ID")
+        self.label1.grid(row=0, column=0)
+        self.entry1 = Entry(self.clientMessageFrame, width=10)
+        self.entry1.grid(row=0, column=1)
+
+        self.label2 = Label(self.clientMessageFrame, text="Message")
+        self.label2.grid(row=1, column=0)
+        self.entry2 = Entry(self.clientMessageFrame, width=10)
+        self.entry2.grid(row=1, column=1)
+
+        self.button1 = Button(self.clientMessageFrame, text="Send message", command=self.sendClientMessage)
+        self.button1.grid(row=2, column=0, columnspan=2)
+
+        self.clientMessageFrame.grid(row=1, column=0, padx=10, pady=30)
+
+
+        self.evalFrame = Frame(self.root)
+
+        self.label3 = Label(self.evalFrame, text="Expression")
+        self.label3.grid(row=1, column=0, columnspan=2)
+        self.entry3 = Text(self.evalFrame, width=120, height=20)
+        self.entry3.grid(row=2, column=1)
+
+        self.button2 = Button(self.evalFrame, text="Evaluate", command=self.evalMessage)
+        self.button2.grid(row=3, column=0, columnspan=2)
+
+        self.result = Label(self.evalFrame)
+        self.result.grid(row=4, column=0, columnspan=2)
+
+        self.evalFrame.grid(row=2, column=0, padx=10, pady=30)
+
+        self.alive = True
+        self.loop()
+
+    def loop(self):
+        while self.alive:
+            try:
+                self.main.update()
+                self.root.update()
             except KeyboardInterrupt:
-                print("\nShutting down server.")
-                for client in self.clients:
-                    client.disconnect()
                 self.alive = False
-                self.s.close()
-                self.s.detach()
-            except Exception as e:
-                print("CRITICAL SERVER ERROR: ", e)
-                traceback.print_exc()
+
+        self.main.shutDown()
+        self.root.destroy()
 
 
 if __name__ == '__main__':
-    t_start = time.time()
-    main = Main()
-    t_end = time.time()
+    f = open('server_settings.txt', 'r', encoding='utf-8')
+    c = eval(f.read())
+    f.close()
+
+    if c['start_gui'] == 'yes':
+        t_start = time.time()
+        main = GUI()
+        t_end = time.time()
+    else:
+        t_start = time.time()
+        main = Main()
+        while True:
+            try:
+                main.update()
+            except KeyboardInterrupt:
+                main.shutDown()
+                break
+        t_end = time.time()
 
     print("Server was running for", (t_end - t_start) // 60, "minutes and",
           round((t_end - t_start) % 60, 1), "seconds!")
