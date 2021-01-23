@@ -1,6 +1,6 @@
 Traceback (most recent call last):
-  File "C:\Users\Zakhar\Desktop\progs\BattleKiller2D\main.py", line 919, in setup
+  File "C:\Users\Zakhar\Desktop\progs\BattleKiller2D\main.py", line 923, in setup
     self.c = Client(self.serverIp, self.serverPort)
-  File "C:\Users\Zakhar\Desktop\progs\BattleKiller2D\main.py", line 339, in __init__
+  File "C:\Users\Zakhar\Desktop\progs\BattleKiller2D\main.py", line 329, in __init__
     self.s.connect((sip, sport))
 ConnectionRefusedError: [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение

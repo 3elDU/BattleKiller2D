@@ -40,8 +40,8 @@ class Item:
         self.specialItem = False
 
     def use(self, bx, by, ox, oy):
-        if level[ox, oy].split('/')[0] == 'chest':
-            items = level[ox, oy].split('/')[1::]
+        if main.map.level[ox, oy].split(',')[0] == 'chest':
+            items = main.map.level[ox, oy].split(',')[1::]
             itemslist = []
             for item in items:
                 i = item.split('=')
@@ -49,13 +49,13 @@ class Item:
                     itemslist.append([i[0], int(i[1])])
 
             ChestMenu(main.sc, itemslist, ox, oy)
-        elif level[ox, oy] == 'heart':
+        elif main.map.level[ox, oy] == 'heart':
             main.defenceLevel += 10
-            MapManager.setBlock(ox, oy, 'grass')
+            main.map.setBlock(ox, oy, 'grass')
 
     def attack(self, bx, by, ox, oy):
-        if level[ox, oy].split('/')[0] == 'chest':
-            items = level[ox, oy].split('/')[1::]
+        if main.map.level[ox, oy].split(',')[0] == 'chest':
+            items = main.map.level[ox, oy].split(',')[1::]
             itemslist = []
             for item in items:
                 i = item.split('=')
@@ -63,9 +63,9 @@ class Item:
                     itemslist.append([i[0], int(i[1])])
 
             ChestMenu(main.sc, itemslist, ox, oy)
-        elif level[ox, oy] == 'heart':
+        elif main.map.level[ox, oy] == 'heart':
             main.defenceLevel += 10
-            MapManager.setBlock(ox, oy, 'grass')
+            main.map.setBlock(ox, oy, 'grass')
 
 
 class Pickaxe(Item):
@@ -75,11 +75,9 @@ class Pickaxe(Item):
         main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
-        global level
-        if not level[bx, by] == 'grass':
-            main.inventory.addInventoryItem(Item(level[bx, by], '', 1))
-        level[bx, by] = 'grass'
-        main.c.sendMessage('set_block' + str(bx) + '/' + str(by) + '/grass')
+        if not main.map.level[bx, by] == 'grass':
+            main.inventory.addInventoryItem(Item(main.map.level[bx, by], '', 1))
+        main.map.setBlock(bx, by, 'grass')
 
 
 class Hammer(Item):
@@ -89,9 +87,7 @@ class Hammer(Item):
         main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
-        global level
-        level[bx, by] = 'wood'
-        main.c.sendMessage('set_block' + str(bx) + '/' + str(by) + '/wood')
+        main.map.setBlock(bx, by, 'wood')
 
     def attack(self, bx, by, ox, oy):
         hit = None
@@ -114,7 +110,7 @@ class MagicStick(Item):
     def use(self, bx, by, ox, oy):
         b = random.choice(['wall', 'grass', 'wood'])
         if b != 'grass':
-            MapManager.setBlock(ox, oy, b)
+            main.map.setBlock(ox, oy, b)
 
 
 class Candle(Item):
@@ -124,14 +120,14 @@ class Candle(Item):
         main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
-        if (ox * BLOCK_W, oy * BLOCK_H) in objects:
-            if not objects[ox * BLOCK_W, oy * BLOCK_H].active:
-                MapManager.createObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
+        if (ox * BLOCK_W, oy * BLOCK_H) in main.map.objects:
+            if not main.map.objects[ox * BLOCK_W, oy * BLOCK_H].active:
+                main.map.createObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
             else:
                 print("removing")
-                MapManager.removeObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
+                main.map.removeObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
         else:
-            MapManager.createObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
+            main.map.createObject(ox * BLOCK_W, oy * BLOCK_H, 'fire')
 
 
 class Knife(Item):
@@ -165,8 +161,6 @@ class SniperRifle(Item):
         super().attack(bx, by, ox, oy)
 
     def attack(self, bx, by, ox, oy):
-        global level
-
         vertical = False
 
         try:
@@ -196,8 +190,8 @@ class SniperRifle(Item):
                 y = m * x + b
 
                 if 0 <= int(x) <= MAP_W and 0 <= int(y) <= MAP_H:
-                    if not level[int(x), int(y)] == 'grass':
-                        print(int(x), int(y), level[int(x), int(y)])
+                    if not main.map.level[int(x), int(y)] == 'grass':
+                        print(int(x), int(y), main.map.level[int(x), int(y)])
                         return
 
                 if not (int(x), int(y)) in changedBlocks:
@@ -212,8 +206,8 @@ class SniperRifle(Item):
 
             for y in range(main.y, oy, step):
                 print(y)
-                if not level[main.x, y] == 'grass':
-                    print(main.x, y, level[main.x, y])
+                if not main.map.level[main.x, y] == 'grass':
+                    print(main.x, y, main.map.level[main.x, y])
                     return
 
                 if not (main.x, y) in changedBlocks:
@@ -304,24 +298,21 @@ class Inventory:
 
 
 class MapManager:
-    @staticmethod
-    def setBlock(x, y, block):
-        global level
+    def __init__(self):
+        self.level = {}
+        self.objects = {}
 
-        level[x, y] = block
+    def setBlock(self, x, y, block):
+        self.level[x, y] = block
         main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(block))
 
-    @staticmethod
-    def createObject(x, y, texture):
-        global objects
-
-        objects[x, y] = Object(x, y, texture)
+    def createObject(self, x, y, texture):
+        self.objects[x, y] = Object(x, y, texture)
         main.c.sendMessage('create_object' + str(x) + '/' + str(y) + '/' + texture)
 
-    @staticmethod
-    def removeObject(x, y, texture):
+    def removeObject(self, x, y, texture):
         main.c.sendMessage('remove_object' + str(x) + '/' + str(y) + '/' + texture)
-        objects[x, y].active = False
+        self.objects[x, y].active = False
 
 
 class Client:
@@ -342,8 +333,6 @@ class Client:
         self.sent = False
 
     def loadLevel(self):
-        global level
-
         received = False
         while not received:
             self.sendMessage('get_level')
@@ -353,7 +342,7 @@ class Client:
                 if 'map' in msg:
                     msg = msg.replace('map', '')
                     try:
-                        level = eval(msg)
+                        main.map.level = eval(msg)
                         received = True
                         print("Level loaded.")
                     except Exception as e:
@@ -363,8 +352,6 @@ class Client:
         global players
         global health
         global bullets
-        global level
-        global objects
         global nextFrameUpdate
 
         msg = ''
@@ -394,10 +381,10 @@ class Client:
                             elif s[0] == 'p':
                                 players[int(s[1])] = Player(int(s[2]), int(s[3]), s[4], eval(s[5]), int(s[6]))
                             elif s[0] == 'cb':
-                                level[int(s[1]), int(s[2])] = s[3]
+                                main.map.level[int(s[1]), int(s[2])] = s[3]
                             elif s[0] == 'o':
-                                objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
-                                objects[int(s[1]), int(s[2])].active = eval(s[4])
+                                main.map.objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
+                                main.map.objects[int(s[1]), int(s[2])].active = eval(s[4])
                             elif s[0] == 'msg':
                                 self.newMessages.append([int(s[1]), str(s[2]), (0, 0, 0)])
                             elif s[0] == 'service':
@@ -469,7 +456,7 @@ class ChestMenu:
         while True:
             main.c.update()
 
-            if level[self.x, self.y].split('/')[0] != 'chest':
+            if main.map.level[self.x, self.y].split(',')[0] != 'chest':
                 return
 
             for e in pygame.event.get():
@@ -492,11 +479,12 @@ class ChestMenu:
 
                     elif e.key == pygame.K_RETURN or e.key == pygame.K_SPACE:
                         for item in self.items:
-                            if item[0] in specialItemList and not specialItemList[item[0]] in inventoryItems:
+                            if item[0] in specialItemList and not specialItemList[item[0]]\
+                                                                  in main.inventory.inventoryItems:
                                 main.inventory.addInventoryItem(specialItemList[item[0]]())
                             else:
                                 main.inventory.addInventoryItem(Item(item[0], item[0], int(item[1])))
-                        MapManager.setBlock(self.x, self.y, 'grass')
+                        main.map.setBlock(self.x, self.y, 'grass')
                         return
 
             main.renderer.renderGame()
@@ -687,7 +675,8 @@ class EventHandler:
                                 #                    + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
                             elif pressed[2]:
                                 if not main.inventory.inventoryItems[main.selectedSlot].specialItem:
-                                    if level[resX, resY] == 'grass' and main.inventory.inventoryItems[main.selectedSlot].count > 0:
+                                    if main.map.level[resX, resY] == 'grass' and \
+                                       main.inventory.inventoryItems[main.selectedSlot].count > 0:
                                         main.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
                                                            main.inventory.inventoryItems[main.selectedSlot].name)
 
@@ -712,7 +701,7 @@ class Renderer:
     def renderGame(self):
         for x in range(MAP_W):
             for y in range(MAP_H):
-                t = main.textures[level[x, y].split('/')[0]]
+                t = main.textures[main.map.level[x, y].split(',')[0]]
                 self.sc.blit(t, t.get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
 
         for bullet in bullets:
@@ -747,22 +736,22 @@ class Renderer:
         pygame.draw.rect(self.sc, (0, 255, 0), (
             main.x * BLOCK_W, main.y * BLOCK_H - (BLOCK_H // 8), int(health * 0.8), BLOCK_H // 8))
 
-        for obj in objects:
-            if objects[obj].active:
-                self.sc.blit(main.textures[objects[obj].texture],
-                             main.textures[objects[obj].texture].get_rect(
-                                 topleft=(objects[obj].x, objects[obj].y)))
+        for obj in main.map.objects:
+            if main.map.objects[obj].active:
+                self.sc.blit(main.textures[main.map.objects[obj].texture],
+                             main.textures[main.map.objects[obj].texture].get_rect(
+                                 topleft=(main.map.objects[obj].x, main.map.objects[obj].y)))
 
         pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H * BLOCK_H], [MAP_W * BLOCK_W, MAP_H * BLOCK_H])
         pygame.draw.rect(self.sc, (255, 255, 255), (0, MAP_H * BLOCK_W, SCREEN_W, BLOCK_H))
 
         for slot in range(len(main.inventory.inventoryItems)):
             if slot == main.selectedSlot:
-                self.sc.blit(main.textures[main.inventory.inventoryItems[slot].name.split('/')[0]],
-                             main.textures[main.inventory.inventoryItems[slot].name.split('/')[0]].get_rect(
+                self.sc.blit(main.textures[main.inventory.inventoryItems[slot].name.split(',')[0]],
+                             main.textures[main.inventory.inventoryItems[slot].name.split(',')[0]].get_rect(
                                  topleft=(slot * BLOCK_W, MAP_H * BLOCK_H)))
             else:
-                t = pygame.transform.scale(main.textures[main.inventory.inventoryItems[slot].name.split('/')[0]],
+                t = pygame.transform.scale(main.textures[main.inventory.inventoryItems[slot].name.split(',')[0]],
                                            (BLOCK_W // 2, BLOCK_H // 2))
                 r = t.get_rect(center=(slot * BLOCK_W + BLOCK_W // 2, MAP_H * BLOCK_H + BLOCK_H // 2))
                 self.sc.blit(t, r)
@@ -898,6 +887,7 @@ class Main:
 
         self.font = pygame.font.SysFont("Arial", 36)
 
+        self.map = MapManager()
         self.inventory = Inventory()
 
         self.chooser = ClassChooser()
@@ -948,7 +938,6 @@ class Main:
 
     def mainLoop(self):
         global RECONNECTING
-        global objects
 
         try:
             self.c.sendMessage('get_objects')
@@ -997,22 +986,22 @@ class Main:
 
                     if keys[pygame.K_w]:
                         if self.y > 0:
-                            if level[self.x, self.y - 1] == 'grass':
+                            if main.map.level[self.x, self.y - 1] == 'grass':
                                 self.y -= 1
                                 self.lastMovement = time.time()
                     if keys[pygame.K_a]:
                         if self.x > 0:
-                            if level[self.x - 1, self.y] == 'grass':
+                            if main.map.level[self.x - 1, self.y] == 'grass':
                                 self.x -= 1
                                 self.lastMovement = time.time()
                     if keys[pygame.K_s]:
                         if self.y < MAP_H - 1:
-                            if level[self.x, self.y + 1] == 'grass':
+                            if main.map.level[self.x, self.y + 1] == 'grass':
                                 self.y += 1
                                 self.lastMovement = time.time()
                     if keys[pygame.K_d]:
                         if self.x < MAP_W - 1:
-                            if level[self.x + 1, self.y] == 'grass':
+                            if main.map.level[self.x + 1, self.y] == 'grass':
                                 self.x += 1
                                 self.lastMovement = time.time()
 
@@ -1092,12 +1081,6 @@ players: {int: Player}
 bullets = []
 bullets: [Bullet]
 
-objects = {}
-objects: {(int, int): Object}
-
-level = {}
-level: {(int, int): str}
-
 nextFrameUpdate = False
 
 health = 100
@@ -1106,14 +1089,11 @@ main: Main
 
 
 def resetGlobals():
-    global players, bullets, objects, level, inventoryItems, nextFrameUpdate, health, RECONNECTING, main
+    global players, bullets, nextFrameUpdate, health, RECONNECTING, main
 
     RECONNECTING = False
     players = {}
     bullets = []
-    objects = {}
-    level = {}
-    inventoryItems = []
     nextFrameUpdate = False
     health = 100
     main = None

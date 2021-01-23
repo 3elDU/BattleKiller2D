@@ -37,9 +37,6 @@ bullets: [Bullet]
 objects = {}
 objects: {(int, int): Object}
 
-level = {}
-level: {(int, int): str}
-
 changedBlocks = []
 changedObjects = []
 newMessages = []
@@ -125,7 +122,7 @@ class Client:
                             print("Client #" + str(self.i) + " disconnected: ", self.a)
 
                         elif message == 'get_level':
-                            self.dataToSend.append('map' + str(level))
+                            self.dataToSend.append('map' + str(main.level.level))
 
                         elif message == 'get_objects':
                             m = ''
@@ -182,7 +179,7 @@ class Client:
                         elif 'set_block' in message:
                             message = message.replace('set_block', '').split('/')
 
-                            level[int(message[0]), int(message[1])] = message[2]
+                            main.level.level[int(message[0]), int(message[1])] = message[2]
 
                             changedBlocks.append([int(message[0]), int(message[1]), message[2]])
                         elif 'shoot' in message:
@@ -281,37 +278,95 @@ class Client:
             print("Exception while trying to disconnect client" + str(self.i), e)
 
 
-class Main:
+class Level:
     def __init__(self):
-        global level
+        self.level: {(int, int): str}
+        self.level = {}
 
-        # Generating level
+        self.__generated = False
+
+    def setBlock(self, x: int, y: int, block: str):
+        self.level[x, y] = block
+        changedBlocks.append([x, y, block])
+
+    def generateBlock(self, x, y):
+        r = random.randint(0, 7)
+        b = 'grass'
+        if r == 0:
+            b = 'wall'
+        if r == 1:
+            b = 'tree'
+        if r == 2 and random.randint(0, 3) == 0:
+            b = self.createChest(x, y)
+        if r == 3 and random.randint(0, 3) == 0:
+            b = 'heart'
+        self.level[x, y] = b
+
+        if self.__generated:
+            changedBlocks.append([x, y, b])
+
+    def generateLevel(self):
         for x in range(MAP_W):
             for y in range(MAP_H):
-                r = random.randint(0, 7)
-                b = 'grass'
-                if r == 0:
-                    b = 'wall'
-                if r == 1:
-                    b = 'tree'
-                if r == 2 and random.randint(0, 3) == 0:
-                    m = 'chest/'
-                    for item in range(random.randint(1, 4)*2):
-                        if random.randint(0, 19) == 0:
-                            instrument = random.choice(
-                                ['pickaxe', 'hammer', 'magic_stick', 'candle', 'sniper_rifle', 'knife']
-                            )
-                            mm = instrument + '=1'
-                            m += mm + '/'
-                        else:
-                            mm = random.choice(['wood', 'wall', 'tree']) + '=' + str(random.randint(1, 15))
-                            m += mm + '/'
-                    print(m)
-                    b = m
-                if r == 3 and random.randint(0, 3) == 0:
-                    b = 'heart'
-                level[x, y] = b
-        level[0, 0] = 'grass'
+                self.generateBlock(x, y)
+        self.level[0, 0] = 'grass'
+
+        self.__generated = True
+
+        # print(self.level)
+
+    def createChest(self, x, y,
+                    lootTable=None, maxItems=8) -> str:
+        if lootTable is None:
+            # First is item itself, second is max possible items that can be generated,
+            # third is spawn chance ( from 0 to 1 )
+            lootTable = [
+                ['pickaxe', 1, 5],
+                ['hammer', 1, 15],
+                ['magic_stick', 1, 10],
+                ['candle', 1, 25],
+                ['sniper_rifle', 1, 0.025],
+                ['knife', 1, 0.5],
+                ['wood', 15, 100],
+                ['wall', 15, 100],
+                ['tree', 15, 100]
+            ]
+
+        m = 'chest,'
+        for item in range(random.randint(1, maxItems//2) * 2):
+            created = False
+
+            while not created:
+                i = random.randint(0, len(lootTable)-1)
+                item = lootTable[i]
+
+                if random.randint(0, 100000)/1000 <= item[2]:
+                    itemName = item[0]
+                    itemCount = random.randint(1, item[1])
+
+                    m += itemName + '=' + str(itemCount) + ','
+
+                    created = True
+
+        print(m)
+
+        self.level[x, y] = m
+        if self.__generated:
+            changedBlocks.append([x, y, m])
+
+        return m
+
+
+
+
+class Main:
+    def __init__(self):
+        global main
+        main = self
+
+        # Generating level
+        self.level = Level()
+        self.level.generateLevel()
 
         # Creating socket object
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -375,7 +430,6 @@ class Main:
     def update(self) -> None:
         global players
         global bullets
-        global level
 
         try:
             # Accepting clients
@@ -434,12 +488,13 @@ class Main:
                         client.serviceMessages.append(response)
             commandsFromClients.clear()
 
-            if time.time() - self.lastBoostSpawn >= 30:
-                toSpawn = random.choice(['chest', 'heart'])
-                x, y = random.randint(0, 15), random.randint(0, 7)
-                changedBlocks.append([x, y, toSpawn])
-                level[x, y] = toSpawn
-                print("Spawned")
+            if time.time() - self.lastBoostSpawn >= 60:
+                x, y = random.randint(0, MAP_W-1), random.randint(0, MAP_H-1)
+                if random.randint(0, 4) == 0:
+                    self.level.setBlock(x, y, 'heart')
+                else:
+                    self.level.createChest(x, y)
+
                 self.lastBoostSpawn = time.time()
 
             if time.time() - self.lastBulletUpdate >= 1 / 5:
@@ -448,7 +503,7 @@ class Main:
                     if bullet.active:
                         # Checking if bullet is within borders of map
                         if 0 <= bullet.x < MAP_W and 0 <= bullet.y < MAP_H and \
-                                level[bullet.x, bullet.y] in ['grass', 'wood']:
+                                main.level.level[bullet.x, bullet.y] in ['grass', 'wood']:
                             # Checking if bullet hits someone
                             hit = False
 
@@ -462,11 +517,11 @@ class Main:
                                     bullets[i].active = False
                                     hit = True
 
-                            if not hit and level[bullet.x, bullet.y] == 'wood' and random.randint(0, 9) == 0:
-                                level[bullet.x, bullet.y] = 'grass'
+                            if not hit and main.level.level[bullet.x, bullet.y] == 'wood' and random.randint(0, 9) == 0:
+                                main.level.level[bullet.x, bullet.y] = 'grass'
                                 changedBlocks.append([bullet.x, bullet.y, 'grass'])
                                 bullets[i].active = False
-                            elif not level[bullet.x, bullet.y] == 'grass':
+                            elif not main.level.level[bullet.x, bullet.y] == 'grass':
                                 bullets[i].active = False
 
                             bullet.x += bullet.movX
@@ -571,7 +626,7 @@ if __name__ == '__main__':
 
     if c['start_gui'] == 'yes':
         t_start = time.time()
-        main = GUI()
+        gui = GUI()
         t_end = time.time()
     else:
         t_start = time.time()
