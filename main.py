@@ -35,9 +35,11 @@ class Bullet:
 
 
 class Item:
-    def __init__(self, name, texture, count):
+    def __init__(self, name, texture, count, specialItem=False):
         self.name, self.texture, self.count = name, texture, count
-        self.specialItem = False
+        self.specialItem = specialItem
+        if self.specialItem:
+            main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
         if main.map.level[ox, oy].split(',')[0] == 'chest':
@@ -70,9 +72,8 @@ class Item:
 
 class Pickaxe(Item):
     def __init__(self):
-        super().__init__('pickaxe', '', 1)
+        super().__init__('pickaxe', 'pickaxe', 1, True)
         self.specialItem = True
-        main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
         if not main.map.level[bx, by] == 'grass':
@@ -82,9 +83,8 @@ class Pickaxe(Item):
 
 class Hammer(Item):
     def __init__(self):
-        super().__init__('hammer', '', 1)
+        super().__init__('hammer', 'pickaxe', 1)
         self.specialItem = True
-        main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
         main.map.setBlock(bx, by, 'wood')
@@ -103,9 +103,8 @@ class Hammer(Item):
 
 class MagicStick(Item):
     def __init__(self):
-        super().__init__('magic_stick', '', 1)
+        super().__init__('magic_stick', 'magic_stick', 1)
         self.specialItem = True
-        main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
         b = random.choice(['wall', 'grass', 'wood'])
@@ -115,9 +114,8 @@ class MagicStick(Item):
 
 class Candle(Item):
     def __init__(self):
-        super().__init__('candle', '', 1)
+        super().__init__('candle', 'candle', 1)
         self.specialItem = True
-        main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
         if (ox * BLOCK_W, oy * BLOCK_H) in main.map.objects:
@@ -132,9 +130,8 @@ class Candle(Item):
 
 class Knife(Item):
     def __init__(self):
-        super().__init__('knife', '', 1)
+        super().__init__('knife', 'knife', 1)
         self.specialItem = True
-        main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
         super().attack(bx, by, ox, oy)
@@ -153,9 +150,8 @@ class Knife(Item):
 
 class SniperRifle(Item):
     def __init__(self):
-        super().__init__('sniper_rifle', '', 1)
+        super().__init__('sniper_rifle', 'sniper_rifle', 1)
         self.specialItem = True
-        main.inventory.addInventoryItem(self)
 
     def use(self, bx, by, ox, oy):
         super().attack(bx, by, ox, oy)
@@ -271,7 +267,7 @@ class Inventory:
 
         self.inventoryItems.append(item)
 
-    def removeInventoryItem(self, item: Item):
+    def removeItem(self, item: Item):
         global main
 
         i: Item
@@ -285,6 +281,18 @@ class Inventory:
                         main.selectedSlot -= 1
 
                 return
+
+    def removeItemByName(self, name: str, count: int):
+        for i in self.inventoryItems:
+            if i.name == name and i.count >= count:
+                i.count -= count
+
+            if i.count <= 0:
+                self.inventoryItems.remove(i)
+                if main.selectedSlot >= len(self.inventoryItems):
+                    main.selectedSlot -= 1
+
+            break
 
     def isItemInInventory(self, name: str) -> bool:
         global main
@@ -317,22 +325,40 @@ class MapManager:
 
 class Client:
     def __init__(self, sip, sport):
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        print("Connecting to server at", sip, sport)
-        self.s.connect((sip, sport))
-        self.s.setblocking(False)
-
-        self.clientId = -1
-
         self.disconnected = False
         self.disconnectReason = ''
+
+        try:
+            self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            print("Connecting to server at", sip, sport)
+            self.s.connect((sip, sport))
+            self.s.setblocking(False)
+
+            self.clientId = -1
+
+            self.loadLevel()
+        except Exception as e:
+            print("Error while connecting to the server:", e)
+            traceback.print_exc()
+
+            file = open('last_err_code.txt', 'w', encoding='utf-8')
+            traceback.print_exc(16384, file)
+            file.close()
+
+            file = open('last_err_code.txt', 'r', encoding='utf-8')
+            err = file.read()
+            file.close()
+
+            self.connectionError = True
+            self.disconnectReason = 'Error:\n' + err
 
         self.newMessages = []
 
         self.sent = False
 
     def loadLevel(self):
+        print("Loading level")
         received = False
         while not received:
             self.sendMessage('get_level')
@@ -375,7 +401,6 @@ class Client:
                                 self.clientId = int(s[1])
 
                             elif s[0] == 'b':
-                                # print(s)
                                 bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
                                                       eval(s[7])))
                             elif s[0] == 'p':
@@ -590,17 +615,16 @@ class ChatMenu:
 
 class EventHandler:
     def __init__(self):
-        pass
+        self.lastMovement = 0
 
-    @staticmethod
-    def handleEvents():
+    def handleEvents(self):
         for e in pygame.event.get():
 
             if e.type == pygame.QUIT:
                 main.c.disconnect()
                 return
 
-            elif e.type == pygame.KEYDOWN and not main.connectionError and not main.c.disconnected:
+            elif e.type == pygame.KEYDOWN and not main.c.disconnected:
 
                 # if e.key == pygame.K_SPACE:
                 #     main.c.sendMessage('shoot' + str(main.x) + '/' + str(main.y + 1) + '/0/1/(0,0,0)')
@@ -635,7 +659,7 @@ class EventHandler:
                     RECONNECTING = True
                     main.running = False
 
-            elif e.type == pygame.MOUSEBUTTONDOWN and not main.connectionError:
+            elif e.type == pygame.MOUSEBUTTONDOWN and not main.c.disconnected:
                 mouse = pygame.mouse.get_pos()
                 x, y = mouse[0], mouse[1]
 
@@ -680,10 +704,8 @@ class EventHandler:
                                         main.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
                                                            main.inventory.inventoryItems[main.selectedSlot].name)
 
-                                        main.inventory.removeInventoryItem(
-                                            Item(main.inventory.inventoryItems[main.selectedSlot].name,
-                                                 '',
-                                                 1))
+                                        main.inventory.removeItemByName(
+                                            main.inventory.inventoryItems[main.selectedSlot].name, 1)
                                 else:
                                     main.inventory.inventoryItems[main.selectedSlot].use(
                                         resX, resY, x // BLOCK_W, y // BLOCK_H)
@@ -692,6 +714,31 @@ class EventHandler:
                 if e.key == pygame.K_r:
                     RECONNECTING = True
                     main.running = False
+
+        # movement
+        if time.time() - self.lastMovement > 1 / 5 and not main.c.disconnected:  # 1/(blocksPerSecond)
+            keys = pygame.key.get_pressed()
+
+            if keys[pygame.K_w]:
+                if main.y > 0:
+                    if main.map.level[main.x, main.y - 1] == 'grass':
+                        main.y -= 1
+                        self.lastMovement = time.time()
+            if keys[pygame.K_a]:
+                if main.x > 0:
+                    if main.map.level[main.x - 1, main.y] == 'grass':
+                        main.x -= 1
+                        self.lastMovement = time.time()
+            if keys[pygame.K_s]:
+                if main.y < MAP_H - 1:
+                    if main.map.level[main.x, main.y + 1] == 'grass':
+                        main.y += 1
+                        self.lastMovement = time.time()
+            if keys[pygame.K_d]:
+                if main.x < MAP_W - 1:
+                    if main.map.level[main.x + 1, main.y] == 'grass':
+                        main.x += 1
+                        self.lastMovement = time.time()
 
 
 class Renderer:
@@ -905,24 +952,8 @@ class Main:
         # Is game running?
         self.running = True
 
-        self.connectionError = False
-        self.connectionErrorTraceback = ''
-
         # Connecting to the server
-        try:
-            self.c = Client(self.serverIp, self.serverPort)
-            self.c.loadLevel()
-        except:
-            self.connectionError = True
-            file = open('last_err_code.txt', 'w', encoding='utf-8')
-            traceback.print_exc(16384, file)
-            file.close()
-
-            file = open('last_err_code.txt', 'r', encoding='utf-8')
-            err = file.read()
-            file.close()
-
-            self.connectionErrorTraceback = err
+        self.c = Client(self.serverIp, self.serverPort)
 
         # Currently selected inventory slot
         self.selectedSlot = 0
@@ -945,7 +976,12 @@ class Main:
             pass
 
         while self.running:
-            if not self.connectionError and not self.c.disconnected:
+            # listening for the events
+            self.eventhandler.handleEvents()
+
+            self.sc.fill((255, 255, 255))
+
+            if not self.c.disconnected:
                 self.c.sendMessage(
                     'set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.playerClass.texture) + '/' + str(
                         health))
@@ -957,53 +993,6 @@ class Main:
                         self.messages.append([msg[0], msg[1], time.time(), 255, msg[2]])
                     self.c.newMessages.clear()
 
-            # listening for the events
-            self.eventhandler.handleEvents()
-
-            self.sc.fill((255, 255, 255))
-
-            if self.c.disconnected:
-                t = self.font.render(self.localization['disconnected'], True, (0, 0, 0))
-                t1 = self.font.render(
-                    self.localization['disconnected_reason'] + self.c.disconnectReason, True, (0, 0, 0))
-                self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
-                self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + BLOCK_H)))
-            elif self.connectionError:
-                t = self.font.render(self.localization['server_connection_error'], True, (255, 0, 0))
-                self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
-
-                err = self.connectionErrorTraceback.split('\n')
-                for line in range(len(err)):
-                    t1 = self.font.render(err[line], True, (0, 0, 0))
-                    self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + (line * 38))))
-
-                t2 = self.font.render(self.localization['try_connect_again'], True, (20, 141, 192))
-                self.sc.blit(t2, t2.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + ((len(err) + 1) * 38))))
-            else:
-                # movement
-                if time.time() - self.lastMovement > 1 / 5:  # 1/(blocksPerSecond)
-                    keys = pygame.key.get_pressed()
-
-                    if keys[pygame.K_w]:
-                        if self.y > 0:
-                            if main.map.level[self.x, self.y - 1] == 'grass':
-                                self.y -= 1
-                                self.lastMovement = time.time()
-                    if keys[pygame.K_a]:
-                        if self.x > 0:
-                            if main.map.level[self.x - 1, self.y] == 'grass':
-                                self.x -= 1
-                                self.lastMovement = time.time()
-                    if keys[pygame.K_s]:
-                        if self.y < MAP_H - 1:
-                            if main.map.level[self.x, self.y + 1] == 'grass':
-                                self.y += 1
-                                self.lastMovement = time.time()
-                    if keys[pygame.K_d]:
-                        if self.x < MAP_W - 1:
-                            if main.map.level[self.x + 1, self.y] == 'grass':
-                                self.x += 1
-                                self.lastMovement = time.time()
 
                 if health > 0:
                     self.renderer.renderGame()
@@ -1012,6 +1001,12 @@ class Main:
                     t = self.font.render(self.localization['game_over'], True, (255, 0, 0))
                     r = t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
                     self.sc.blit(t, r)
+            else:
+                t = self.font.render(self.localization['disconnected'], True, (0, 0, 0))
+                t1 = self.font.render(
+                    self.localization['disconnected_reason'] + self.c.disconnectReason, True, (0, 0, 0))
+                self.sc.blit(t, t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H)))
+                self.sc.blit(t1, t1.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 + BLOCK_H)))
 
             pygame.display.update()
 
