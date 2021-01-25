@@ -351,7 +351,7 @@ class Level:
                 ['tree', 15, 100]
             ]
 
-        m = 'chest,'
+        m = 'chest'
         for item in range(random.randint(1, maxItems//2) * 2):
             created = False
 
@@ -363,7 +363,7 @@ class Level:
                     itemName = item[0]
                     itemCount = random.randint(1, item[1])
 
-                    m += itemName + '=' + str(itemCount) + ','
+                    m += ',' + itemName + '=' + str(itemCount)
 
                     created = True
 

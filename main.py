@@ -38,41 +38,36 @@ class Item:
     def __init__(self, name, texture, count, specialItem=False):
         self.name, self.texture, self.count = name, texture, count
         self.specialItem = specialItem
-        if self.specialItem:
-            main.inventory.addInventoryItem(self)
+
+    @staticmethod
+    def interactWithBlock(x, y):
+        if main.map.level[x, y].split(',')[0] == 'chest':
+            items = main.map.level[x, y].split(',')[1::]
+            itemslist = []
+            for item in items:
+                i = item.split('=')
+                if len(i) == 2:
+                    itemslist.append([i[0], int(i[1])])
+
+            ChestMenu(main.sc, itemslist, x, y)
+        elif main.map.level[x, y] == 'wooden_door_closed':
+            main.map.setBlock(x, y, 'wooden_door_opened')
+        elif main.map.level[x, y] == 'wooden_door_opened':
+            main.map.setBlock(x, y, 'wooden_door_closed')
+        elif main.map.level[x, y] == 'heart':
+            main.defenceLevel += 10
+            main.map.setBlock(x, y, 'grass')
 
     def use(self, bx, by, ox, oy):
-        if main.map.level[ox, oy].split(',')[0] == 'chest':
-            items = main.map.level[ox, oy].split(',')[1::]
-            itemslist = []
-            for item in items:
-                i = item.split('=')
-                if len(i) == 2:
-                    itemslist.append([i[0], int(i[1])])
-
-            ChestMenu(main.sc, itemslist, ox, oy)
-        elif main.map.level[ox, oy] == 'heart':
-            main.defenceLevel += 10
-            main.map.setBlock(ox, oy, 'grass')
+        self.interactWithBlock(ox, oy)
 
     def attack(self, bx, by, ox, oy):
-        if main.map.level[ox, oy].split(',')[0] == 'chest':
-            items = main.map.level[ox, oy].split(',')[1::]
-            itemslist = []
-            for item in items:
-                i = item.split('=')
-                if len(i) == 2:
-                    itemslist.append([i[0], int(i[1])])
-
-            ChestMenu(main.sc, itemslist, ox, oy)
-        elif main.map.level[ox, oy] == 'heart':
-            main.defenceLevel += 10
-            main.map.setBlock(ox, oy, 'grass')
+        self.interactWithBlock(ox, oy)
 
 
 class Pickaxe(Item):
     def __init__(self):
-        super().__init__('pickaxe', 'pickaxe', 1, True)
+        super().__init__('pickaxe', 'pickaxe', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -83,11 +78,12 @@ class Pickaxe(Item):
 
 class Hammer(Item):
     def __init__(self):
-        super().__init__('hammer', 'pickaxe', 1)
+        super().__init__('hammer', 'pickaxe', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
-        main.map.setBlock(bx, by, 'wood')
+        if main.map.level[bx, by] == 'grass':
+            main.map.setBlock(bx, by, 'wood')
 
     def attack(self, bx, by, ox, oy):
         hit = None
@@ -103,7 +99,7 @@ class Hammer(Item):
 
 class MagicStick(Item):
     def __init__(self):
-        super().__init__('magic_stick', 'magic_stick', 1)
+        super().__init__('magic_stick', 'magic_stick', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -114,7 +110,7 @@ class MagicStick(Item):
 
 class Candle(Item):
     def __init__(self):
-        super().__init__('candle', 'candle', 1)
+        super().__init__('candle', 'candle', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -130,7 +126,7 @@ class Candle(Item):
 
 class Knife(Item):
     def __init__(self):
-        super().__init__('knife', 'knife', 1)
+        super().__init__('knife', 'knife', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -150,7 +146,7 @@ class Knife(Item):
 
 class SniperRifle(Item):
     def __init__(self):
-        super().__init__('sniper_rifle', 'sniper_rifle', 1)
+        super().__init__('sniper_rifle', 'sniper_rifle', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -160,7 +156,7 @@ class SniperRifle(Item):
         vertical = False
 
         try:
-            m = (oy-main.y) / (ox-main.x)
+            m = (oy - main.y) / (ox - main.x)
         except ZeroDivisionError:
             m = 0
             vertical = True
@@ -179,16 +175,19 @@ class SniperRifle(Item):
 
         changedBlocks = []
 
+        hitBlock = False
+
         if not vertical:
-            for xx in range(main.x*20, ox*20, step):
-                x = xx/20
+            for xx in range(main.x * 20, ox * 20, step):
+                x = xx / 20
 
                 y = m * x + b
 
                 if 0 <= int(x) <= MAP_W and 0 <= int(y) <= MAP_H:
                     if not main.map.level[int(x), int(y)] == 'grass':
                         print(int(x), int(y), main.map.level[int(x), int(y)])
-                        return
+                        hitBlock = True
+                        break
 
                 if not (int(x), int(y)) in changedBlocks:
                     changedBlocks.append((int(x), int(y)))
@@ -204,10 +203,16 @@ class SniperRifle(Item):
                 print(y)
                 if not main.map.level[main.x, y] == 'grass':
                     print(main.x, y, main.map.level[main.x, y])
-                    return
+                    hitBlock = True
+                    break
 
                 if not (main.x, y) in changedBlocks:
                     changedBlocks.append((main.x, y))
+
+        if hitBlock:
+            main.sounds['sniper_rifle_wall_shot'].play()
+        else:
+            main.sounds['sniper_rifle_shot'].play()
 
         print('Changed blocks: ', len(changedBlocks))
 
@@ -311,6 +316,12 @@ class MapManager:
         self.objects = {}
 
     def setBlock(self, x, y, block):
+        # Playing sound if we break block
+        if block == 'grass':
+            main.sounds['block_break'].play()
+        else:
+            main.sounds['block_place'].play()
+
         self.level[x, y] = block
         main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(block))
 
@@ -416,7 +427,7 @@ class Client:
                                 self.newMessages.append([0, str(s[1]), (255, 0, 0)])
 
                             elif s[0] == 'bullet_hit':
-                                health -= int(abs(int(s[1]) - int(s[1])*main.defenceLevel*0.01))
+                                health -= int(abs(int(s[1]) - int(s[1]) * main.defenceLevel * 0.01))
                             elif s[0] == 'disconnect':
                                 print("Disconnected from the server.")
                                 print(s)
@@ -471,7 +482,7 @@ class ChestMenu:
         self.selected = 0
         self.x, self.y = ox, oy
 
-        self.gray = pygame.Surface((SCREEN_W, SCREEN_H))
+        self.gray = pygame.Surface((MAP_W * BLOCK_W, MAP_H * BLOCK_H))
         self.gray.fill((0, 0, 0))
         self.gray.set_alpha(128)
 
@@ -493,44 +504,135 @@ class ChestMenu:
 
                     elif e.key == pygame.K_LEFT:
                         if self.selected == 0:
-                            self.selected = len(self.items)-1
+                            self.selected = len(self.items) - 1
                         else:
                             self.selected -= 1
                     elif e.key == pygame.K_RIGHT:
-                        if self.selected == len(self.items)-1:
+                        if self.selected == len(self.items) - 1:
                             self.selected = 0
                         else:
                             self.selected += 1
 
-                    elif e.key == pygame.K_RETURN or e.key == pygame.K_SPACE:
+                    if e.key == pygame.K_q:
+                        if main.selectedSlot > 0:
+                            main.selectedSlot -= 1
+                        else:
+                            main.selectedSlot = len(main.inventory.inventoryItems) - 1
+                    if e.key == pygame.K_e:
+                        if main.selectedSlot < len(main.inventory.inventoryItems) - 1:
+                            main.selectedSlot += 1
+                        else:
+                            main.selectedSlot = 0
+
+                    # Taking all items out of the chest
+                    elif e.key == pygame.K_g:
                         for item in self.items:
-                            if item[0] in specialItemList and not specialItemList[item[0]]\
+                            if item[0] in specialItemList and not specialItemList[item[0]] \
                                                                   in main.inventory.inventoryItems:
                                 main.inventory.addInventoryItem(specialItemList[item[0]]())
                             else:
                                 main.inventory.addInventoryItem(Item(item[0], item[0], int(item[1])))
-                        main.map.setBlock(self.x, self.y, 'grass')
+                        main.map.setBlock(self.x, self.y, 'chest')
                         return
+                    # Taking selected item(s) from the chest
+                    elif e.key == pygame.K_b:
+                        if len(self.items) > 0:
+                            item = self.items[self.selected]
+                            if item[0] in specialItemList and not specialItemList[item[0]] \
+                                                                  in main.inventory.inventoryItems:
+                                main.inventory.addInventoryItem(specialItemList[item[0]]())
+                            else:
+                                main.inventory.addInventoryItem(Item(item[0], item[0], int(item[1])))
+                            self.items.remove(item)
+
+                            s = 'chest,'
+                            for item in self.items:
+                                s += item[0] + '=' + str(item[1]) + ','
+
+                            main.map.setBlock(self.x, self.y, s)
+
+                            if self.selected > len(self.items)-1:
+                                print("large")
+                                self.selected = len(self.items)-1
+
+                    # Adding selected item(s) to the chest
+                    if len(main.inventory.inventoryItems) > 0:
+                        if e.key == pygame.K_h:
+                            name = main.inventory.inventoryItems[main.selectedSlot].name
+                            count = main.inventory.inventoryItems[main.selectedSlot].count
+
+                            # Chesking if there already is item with same id in the chest
+                            foundSame = False
+                            for item in self.items:
+                                if item[0] == name:
+                                    foundSame = True
+                                    item[1] += count
+                            if not foundSame:
+                                self.items.append([name, count])
+
+
+                            main.inventory.removeItem(Item(name, name, count))
+
+                            s = 'chest'
+                            for item in self.items:
+                                s += ',' + item[0] + '=' + str(item[1])
+
+                            main.map.setBlock(self.x, self.y, s)
+
+                            if main.selectedSlot > len(main.inventory.inventoryItems):
+                                main.selectedSlot = len(main.inventory.inventoryItems) - 1
+                        # Adding one selected item to the chest
+                        elif e.key == pygame.K_n:
+                            name = main.inventory.inventoryItems[main.selectedSlot].name
+
+                            # Chesking if there already is item with same id in the chest
+                            foundSame = False
+                            for item in self.items:
+                                if item[0] == name:
+                                    foundSame = True
+                                    item[1] += 1
+                            if not foundSame:
+                                self.items.append([name, 1])
+
+                            main.inventory.removeItem(Item(name, name, 1))
+
+                            s = 'chest'
+                            for item in self.items:
+                                s += ',' + item[0] + '=' + str(item[1])
+
+                            main.map.setBlock(self.x, self.y, s)
+
+                            if main.selectedSlot > len(main.inventory.inventoryItems):
+                                main.selectedSlot = len(main.inventory.inventoryItems) - 1
 
             main.renderer.renderGame()
             self.sc.blit(self.gray, self.gray.get_rect(topleft=(0, 0)))
 
-            pygame.draw.rect(self.sc, (255, 255, 255), (SCREEN_W//2-len(self.items)//2*BLOCK_W,
-                                                        SCREEN_H//2-BLOCK_H//2,
-                                                        len(self.items)*BLOCK_W,
+            pygame.draw.rect(self.sc, (255, 255, 255), (SCREEN_W // 2 - len(self.items) // 2 * BLOCK_W,
+                                                        SCREEN_H // 2 - BLOCK_H // 2,
+                                                        len(self.items) * BLOCK_W,
                                                         BLOCK_H))
 
-            for item in range(len(self.items)):
-                p = SCREEN_W//2-len(self.items)//2*BLOCK_W + item*BLOCK_W
-                if self.selected != item:
-                    t = pygame.transform.scale(main.textures[self.items[item][0]], (BLOCK_W//2, BLOCK_H//2))
-                else:
-                    t = main.textures[self.items[item][0]]
-                self.sc.blit(t, t.get_rect(center=(p+BLOCK_W//2, SCREEN_H//2)))
+            if len(self.items) > 0:
+                for item in range(len(self.items)):
+                    p = SCREEN_W // 2 - len(self.items) // 2 * BLOCK_W + item * BLOCK_W
+                    if self.selected != item:
+                        t = pygame.transform.scale(main.textures[self.items[item][0].split(',')[0]], (BLOCK_W // 2, BLOCK_H // 2))
+                    else:
+                        t = main.textures[self.items[item][0]]
+                    self.sc.blit(t, t.get_rect(center=(p + BLOCK_W // 2, SCREEN_H // 2)))
 
-                t = main.font.render(str(self.items[item][1]), True, (0, 0, 0))
-                r = t.get_rect(center=(p+BLOCK_W//2, SCREEN_H//2+BLOCK_H//2))
-                self.sc.blit(t, r)
+                    t = main.font.render(str(self.items[item][1]), True, (0, 0, 0))
+                    r = t.get_rect(center=(p + BLOCK_W // 2, SCREEN_H // 2 + BLOCK_H // 2))
+                    self.sc.blit(t, r)
+            else:
+                text = main.font.render('This chest is empty!', True, (0, 0, 0))
+                r = text.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
+                pygame.draw.rect(self.sc, (255, 255, 255),
+                                 (SCREEN_W // 2 - text.get_width() // 2 - 10,
+                                  SCREEN_H // 2 - text.get_height() // 2 - 10,
+                                  text.get_width() + 20, text.get_height() + 20))
+                self.sc.blit(text, r)
 
             pygame.display.update()
 
@@ -626,8 +728,8 @@ class EventHandler:
 
             elif e.type == pygame.KEYDOWN and not main.c.disconnected:
 
-                # if e.key == pygame.K_SPACE:
-                #     main.c.sendMessage('shoot' + str(main.x) + '/' + str(main.y + 1) + '/0/1/(0,0,0)')
+                if e.key == pygame.K_SPACE and e.mod == pygame.KMOD_LSHIFT:
+                    main.c.sendMessage('shoot' + str(main.x) + '/' + str(main.y + 1) + '/0/1/(0,0,0)')
 
                 if e.key == pygame.K_q or e.key == pygame.K_LEFT:
                     if main.selectedSlot > 0:
@@ -691,24 +793,31 @@ class EventHandler:
                         resY = main.y + movY
 
                         if not (movX == 0 and movY == 0) and 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
-                            if pressed[0]:
-                                main.inventory.inventoryItems[main.selectedSlot].attack(
-                                    resX, resY, x // BLOCK_W, y // BLOCK_H)
-
-                                # self.c.sendMessage('shoot' + str(self.x + movX) + '/' + str(self.y + movY)
-                                #                    + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
-                            elif pressed[2]:
-                                if not main.inventory.inventoryItems[main.selectedSlot].specialItem:
-                                    if main.map.level[resX, resY] == 'grass' and \
-                                       main.inventory.inventoryItems[main.selectedSlot].count > 0:
-                                        main.c.sendMessage('set_block' + str(resX) + '/' + str(resY) + '/' +
-                                                           main.inventory.inventoryItems[main.selectedSlot].name)
-
-                                        main.inventory.removeItemByName(
-                                            main.inventory.inventoryItems[main.selectedSlot].name, 1)
-                                else:
-                                    main.inventory.inventoryItems[main.selectedSlot].use(
+                            if len(main.inventory.inventoryItems) == 0:
+                                i = Item('pickaxe', 'pickaxe', 1)
+                                if pressed[0]:
+                                    i.attack(resX, resY, resX, resY)
+                                elif pressed[2]:
+                                    i.use(resX, resY, resX, resY)
+                            else:
+                                if pressed[0]:
+                                    main.inventory.inventoryItems[main.selectedSlot].attack(
                                         resX, resY, x // BLOCK_W, y // BLOCK_H)
+
+                                    # self.c.sendMessage('shoot' + str(self.x + movX) + '/' + str(self.y + movY)
+                                    #                    + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
+                                elif pressed[2]:
+                                    if not main.inventory.inventoryItems[main.selectedSlot].specialItem:
+                                        if main.map.level[resX, resY] == 'grass' and \
+                                                main.inventory.inventoryItems[main.selectedSlot].count > 0:
+                                            main.map.setBlock(resX, resY,
+                                                              main.inventory.inventoryItems[main.selectedSlot].name)
+
+                                            main.inventory.removeItem(
+                                                Item(main.inventory.inventoryItems[main.selectedSlot].name, '', 1))
+                                    else:
+                                        main.inventory.inventoryItems[main.selectedSlot].use(
+                                            resX, resY, x // BLOCK_W, y // BLOCK_H)
 
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_r:
@@ -721,22 +830,22 @@ class EventHandler:
 
             if keys[pygame.K_w]:
                 if main.y > 0:
-                    if main.map.level[main.x, main.y - 1] == 'grass':
+                    if main.map.level[main.x, main.y - 1] in ['grass', 'wooden_door_opened']:
                         main.y -= 1
                         self.lastMovement = time.time()
             if keys[pygame.K_a]:
                 if main.x > 0:
-                    if main.map.level[main.x - 1, main.y] == 'grass':
+                    if main.map.level[main.x - 1, main.y] in ['grass', 'wooden_door_opened']:
                         main.x -= 1
                         self.lastMovement = time.time()
             if keys[pygame.K_s]:
                 if main.y < MAP_H - 1:
-                    if main.map.level[main.x, main.y + 1] == 'grass':
+                    if main.map.level[main.x, main.y + 1] in ['grass', 'wooden_door_opened']:
                         main.y += 1
                         self.lastMovement = time.time()
             if keys[pygame.K_d]:
                 if main.x < MAP_W - 1:
-                    if main.map.level[main.x + 1, main.y] == 'grass':
+                    if main.map.level[main.x + 1, main.y] in ['grass', 'wooden_door_opened']:
                         main.x += 1
                         self.lastMovement = time.time()
 
@@ -817,7 +926,7 @@ class Renderer:
         self.sc.blit(t, r)
 
         t = main.font.render("Defence level: " + str(main.defenceLevel), True, (0, 0, 0))
-        r = t.get_rect(topleft=(4*BLOCK_W, 0))
+        r = t.get_rect(topleft=(4 * BLOCK_W, 0))
         self.sc.blit(t, r)
 
         for message in main.messages:
@@ -889,7 +998,13 @@ class ClassChooser:
 
             pygame.display.update()
 
-        classes[variant][2][1]()
+        # Adding items from player's class to inventory
+        for item in classes[variant][2]:
+            main.inventory.addInventoryItem(item())
+
+        # Giving every player 10 wooden doors just for fun :)
+        main.inventory.addInventoryItem(Item('wooden_door_closed', 'wooden_door_closed', 10))
+
         return PlayerClass(classes[variant][2][0](), classes[variant][1], classes[variant][0])
 
 
@@ -913,7 +1028,13 @@ class Main:
         files = os.listdir('textures/')
         self.textures = {}
         for filename in files:
-            self.textures[filename.replace('.png', '')] = pygame.image.load('textures/'+filename).convert_alpha()
+            self.textures[filename.replace('.png', '')] = pygame.image.load('textures/' + filename).convert_alpha()
+
+    def loadSounds(self):
+        files = os.listdir('sounds/')
+        self.sounds = {}
+        for filename in files:
+            self.sounds[filename.split('.')[0]] = pygame.mixer.Sound('sounds/' + filename)
 
     def __init__(self, surface):
         global main
@@ -931,6 +1052,7 @@ class Main:
         self.loadConfig()
 
         self.loadTextures()
+        self.loadSounds()
 
         self.font = pygame.font.SysFont("Arial", 36)
 
@@ -992,7 +1114,6 @@ class Main:
                     for msg in self.c.newMessages:
                         self.messages.append([msg[0], msg[1], time.time(), 255, msg[2]])
                     self.c.newMessages.clear()
-
 
                 if health > 0:
                     self.renderer.renderGame()
