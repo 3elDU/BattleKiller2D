@@ -15,6 +15,16 @@ SCREEN_W = MAP_W * BLOCK_W
 SCREEN_H = (MAP_H + 1) * BLOCK_H
 
 
+class ChatMessage:
+    def __init__(self, message: str, sender: str = '',
+                 color: tuple = (0, 0, 0), serviceMessage: bool = False, alpha: int = 255):
+        self.message = message
+        self.sender = sender
+        self.color = color
+        self.serviceMessage = serviceMessage
+        self.alpha = alpha
+
+
 class Player:
     def __init__(self, x, y, texture, active, phealth):
         self.x, self.y, self.texture = x, y, texture
@@ -220,15 +230,16 @@ class SniperRifle(Item):
         #     print(block[0], block[1])
         #     level[block[0], block[1]] = 'wood'
 
-        hit = None
-        for player in players:
-            if players[player].x == ox and players[player].y == oy:
-                hit = player
-        if hit is not None:
-            print("I'm attacking!")
-            msg = 'attack' + str(hit) + '/' + str(random.randint(20, 40))
-            print(msg)
-            main.c.sendMessage(msg)
+        if not hitBlock:
+            hit = None
+            for player in players:
+                if players[player].x == ox and players[player].y == oy:
+                    hit = player
+            if hit is not None:
+                print("I'm attacking!")
+                msg = 'attack' + str(hit) + '/' + str(random.randint(20, 40))
+                print(msg)
+                main.c.sendMessage(msg)
 
 
 specialItemList = {'pickaxe': Pickaxe, 'hammer': Hammer,
@@ -385,6 +396,9 @@ class Client:
                     except Exception as e:
                         print("Error while trying to load level:", e)
 
+    def setNickname(self, nickname: str):
+        self.sendMessage('set_nick/'+str(nickname))
+
     def update(self):
         global players
         global health
@@ -411,6 +425,10 @@ class Client:
                             if s[0] == 'yourid':
                                 self.clientId = int(s[1])
 
+                            elif s[0] == 'setpos':
+                                main.x = int(s[1])
+                                main.y = int(s[2])
+
                             elif s[0] == 'b':
                                 bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
                                                       eval(s[7])))
@@ -422,9 +440,9 @@ class Client:
                                 main.map.objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
                                 main.map.objects[int(s[1]), int(s[2])].active = eval(s[4])
                             elif s[0] == 'msg':
-                                self.newMessages.append([int(s[1]), str(s[2]), (0, 0, 0)])
+                                self.newMessages.append([int(s[1]), str(s[2]), (0, 0, 0), False])
                             elif s[0] == 'service':
-                                self.newMessages.append([0, str(s[1]), (255, 0, 0)])
+                                self.newMessages.append([0, str(s[1]), eval(s[2]), True])
 
                             elif s[0] == 'bullet_hit':
                                 health -= int(abs(int(s[1]) - int(s[1]) * main.defenceLevel * 0.01))
@@ -538,8 +556,8 @@ class ChestMenu:
                     elif e.key == pygame.K_b:
                         if len(self.items) > 0:
                             item = self.items[self.selected]
-                            if item[0] in specialItemList and not specialItemList[item[0]] \
-                                                                  in main.inventory.inventoryItems:
+                            if item[0] in specialItemList and \
+                                    not specialItemList[item[0]] in main.inventory.inventoryItems:
                                 main.inventory.addInventoryItem(specialItemList[item[0]]())
                             else:
                                 main.inventory.addInventoryItem(Item(item[0], item[0], int(item[1])))
@@ -551,9 +569,9 @@ class ChestMenu:
 
                             main.map.setBlock(self.x, self.y, s)
 
-                            if self.selected > len(self.items)-1:
+                            if self.selected > len(self.items) - 1:
                                 print("large")
-                                self.selected = len(self.items)-1
+                                self.selected = len(self.items) - 1
 
                     # Adding selected item(s) to the chest
                     if len(main.inventory.inventoryItems) > 0:
@@ -569,7 +587,6 @@ class ChestMenu:
                                     item[1] += count
                             if not foundSame:
                                 self.items.append([name, count])
-
 
                             main.inventory.removeItem(Item(name, name, count))
 
@@ -617,7 +634,8 @@ class ChestMenu:
                 for item in range(len(self.items)):
                     p = SCREEN_W // 2 - len(self.items) // 2 * BLOCK_W + item * BLOCK_W
                     if self.selected != item:
-                        t = pygame.transform.scale(main.textures[self.items[item][0].split(',')[0]], (BLOCK_W // 2, BLOCK_H // 2))
+                        t = pygame.transform.scale(
+                            main.textures[self.items[item][0].split(',')[0]], (BLOCK_W // 2, BLOCK_H // 2))
                     else:
                         t = main.textures[self.items[item][0]]
                     self.sc.blit(t, t.get_rect(center=(p + BLOCK_W // 2, SCREEN_H // 2)))
@@ -633,6 +651,47 @@ class ChestMenu:
                                   SCREEN_H // 2 - text.get_height() // 2 - 10,
                                   text.get_width() + 20, text.get_height() + 20))
                 self.sc.blit(text, r)
+
+            pygame.display.update()
+
+
+class InputPrompt:
+    def __init__(self, message=''):
+        self.sc = main.sc
+
+        self.__prompt = message
+        self.__input = ''
+
+    def getInput(self): return self.__input
+
+    def show(self):
+        while True:
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    exit()
+
+                elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_RETURN:
+                        return
+                    elif e.key == pygame.K_ESCAPE or e.key == pygame.K_TAB:
+                        return
+                    elif e.key == pygame.K_BACKSPACE:
+                        self.__input = self.__input[:len(self.__input) - 1]
+                    else:
+                        self.__input += e.unicode
+
+            self.sc.fill((200, 200, 200))
+
+            msg = main.font.render(self.__prompt, True, (0, 0, 0))
+            msgr = msg.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H))
+            pygame.draw.rect(self.sc, (100, 100, 100), (msgr.left-20, msgr.top-20, msgr.width+40, msgr.height+40))
+            self.sc.blit(msg, msgr)
+
+            inp = main.font.render(self.__input, True, (0, 0, 0))
+            inpr = inp.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
+            pygame.draw.rect(self.sc, (100, 100, 100),
+                             (inpr.left - 20, inpr.top - 20, inpr.width + 40, inpr.height + 40))
+            self.sc.blit(inp, inpr)
 
             pygame.display.update()
 
@@ -929,20 +988,23 @@ class Renderer:
         r = t.get_rect(topleft=(4 * BLOCK_W, 0))
         self.sc.blit(t, r)
 
+        message: ChatMessage
         for message in main.messages:
-            if message[4] == (0, 0, 0):
-                t = main.font.render("Player #" + str(message[0]) + " : " + message[1], True, message[4])
+            if not message.serviceMessage:
+                t = main.font.render("Player #" + str(message.sender) + " : " + message.message, True, message.color)
             else:
-                t = main.font.render("[SERVER] " + str(message[0]) + " : " + message[1], True, message[4])
+                t = main.font.render("server: " + str(message.message), True, message.color)
 
-            t.set_alpha(int(message[3]))
+            if message.alpha <= 255:
+                t.set_alpha(int(message.alpha))
+
             r = t.get_rect(topleft=(0, BLOCK_H // 2 * (2 + main.messages.index(message))))
             self.sc.blit(t, r)
             # self.messages[self.messages.index(message)][3] -= 0.5 + 2 * (1 / (len(message[1]) / 5))
-            main.messages[main.messages.index(message)][3] -= 1
+            main.messages[main.messages.index(message)].alpha -= 1
 
         for message in main.messages:
-            if message[3] <= 32:
+            if message.alpha <= 0:
                 main.messages.remove(message)
 
         mouse = pygame.mouse.get_pos()
@@ -1074,8 +1136,14 @@ class Main:
         # Is game running?
         self.running = True
 
+        # Asking player's nickname
+        self.nicknamePrompt = InputPrompt('Please enter your nickname')
+        self.nicknamePrompt.show()
+        self.nickname = self.nicknamePrompt.getInput()
+
         # Connecting to the server
         self.c = Client(self.serverIp, self.serverPort)
+        self.c.setNickname(self.nickname)
 
         # Currently selected inventory slot
         self.selectedSlot = 0
@@ -1112,7 +1180,10 @@ class Main:
 
                 if self.c.newMessages:
                     for msg in self.c.newMessages:
-                        self.messages.append([msg[0], msg[1], time.time(), 255, msg[2]])
+                        alpha = 256
+                        if msg[2] == (255, 0, 0): alpha = 1024
+
+                        self.messages.append(ChatMessage(msg[1], msg[0], msg[2], True, alpha))
                     self.c.newMessages.clear()
 
                 if health > 0:

@@ -9,10 +9,11 @@ MAP_H = 8
 
 
 class Player:
-    def __init__(self, x, y, texture, health):
+    def __init__(self, x, y, texture, health=100, nickname=''):
         self.x, self.y, self.texture = x, y, texture
         self.active = True
         self.health = health
+        self.nickname = nickname
 
 
 class Object:
@@ -28,6 +29,13 @@ class Bullet:
         self.active = False
 
 
+class Damage:
+    def __init__(self, damageAmount, receiver, damager):
+        self.damageAmount = damageAmount
+        self.receiver = receiver
+        self.damager = damager
+
+
 players = {}
 players: {int: Player}
 
@@ -41,6 +49,7 @@ changedBlocks = []
 changedObjects = []
 newMessages = []
 
+playersDamaged: [Damage]
 playersDamaged = []
 playersLeft = []
 
@@ -75,9 +84,25 @@ class Client:
         self.serviceMessages = []
         self.playersLeft = []
 
+        # Messages here will be sended to client as-is
+        self.rawDataToSend = []
+
         self.lastAliveMessage = time.time()
 
         print("Client #" + str(self.clientID) + " connected: ", self.a)
+
+    def sendMessage(self, msg: str, color=(0, 0, 255)):
+        self.serviceMessages.append([msg, color])
+
+    def setPosition(self, x: int, y: int):
+        self.rawDataToSend.append('setpos/' + str(x) + '/' + str(y))
+
+    def getNickname(self) -> str:
+        return players[self.clientID].nickname
+
+    def setNickname(self, nickname: str):
+        players[self.clientID].nickname = nickname
+
 
     def __receiveMessages(self) -> None:
         try:
@@ -145,7 +170,10 @@ class Client:
                             m += 'msg/' + str(b[0]) + '/' + str(b[1]) + ';'
 
                     for b in self.serviceMessages:
-                        m += 'service/' + 'Response from the Server: ' + str(b) + ';'
+                        m += 'service/' + str(b[0]) + '/' + str(b[1]) + ';'
+
+                    for b in self.rawDataToSend:
+                        m += b + ';'
 
                     if m == '':
                         m = 'nothing'
@@ -155,13 +183,20 @@ class Client:
                     self.changedObjects.clear()
                     self.newMessages.clear()
                     self.serviceMessages.clear()
+                    self.rawDataToSend.clear()
                     self.playersLeft.clear()
+                elif 'set_nick' in message:
+                    message = message.replace('set_nick/', '').split('/')
+
+                    players[self.clientID].nickname = message[0]
+                    print('Client #', self.clientID, 'set his nickname to', message[0])
                 elif 'set_player' in message:
                     # print(message)
 
                     message = message.replace('set_player', '').split('/')
 
-                    p = Player(int(message[0]), int(message[1]), message[2], int(message[3]))
+                    p = Player(int(message[0]), int(message[1]), message[2], int(message[3]),
+                               nickname=players[self.clientID].nickname)
 
                     players[self.clientID] = p
                 elif 'set_block' in message:
@@ -203,7 +238,7 @@ class Client:
                     message = message.replace('attack', '').split('/')
                     global playersDamaged
 
-                    playersDamaged.append([int(message[0]), int(message[1])])
+                    playersDamaged.append(Damage(int(message[1]), int(message[0]), self.clientID))
 
                 else:
                     if message:
@@ -376,6 +411,9 @@ class Level:
         return m
 
 
+class Spawnpoint:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
 
 
 class Main:
@@ -428,6 +466,10 @@ class Main:
         self.clients = []
         self.clients: [Client]
 
+        # Spawnpoint where joined players will appear
+        self.spawn = Spawnpoint(random.randint(0, MAP_W-1), random.randint(0, MAP_H-1))
+        self.level.level[self.spawn.x, self.spawn.y] = 'grass'
+
         self.lastBulletUpdate = time.time()
         self.lastBoostSpawn = time.time()
 
@@ -437,6 +479,11 @@ class Main:
             if players[client.clientID].active: playersOnline += 1
 
         return playersOnline
+
+    def broadcastMessage(self, msg: str):
+        client: Client
+        for client in self.clients:
+            client.sendMessage(msg)
 
 
     def handleCommand(self, command: str) -> str:
@@ -463,6 +510,7 @@ class Main:
             players[i] = Player(0, 0, 'grass', 100)
 
             client = Client(sock, addr, i)
+            client.setPosition(self.spawn.x, self.spawn.y)
             self.clients.append(client)
 
         except socket.error:
@@ -493,8 +541,13 @@ class Main:
                 client.newMessages.append(msg)
         newMessages.clear()
 
+        player: Damage
         for player in playersDamaged:
-            self.clients[player[0]].dataToSend.append('bullet_hit/' + str(player[1]))
+            print(player.damageAmount, player.damager, player.receiver)
+            self.clients[player.receiver].dataToSend.append('bullet_hit/' + str(player.damageAmount))
+            if players[player.receiver].health-player.damageAmount <= 0:
+                self.broadcastMessage(
+                    players[player.receiver].nickname + ' was killed by ' + players[player.damager].nickname)
         playersDamaged.clear()
 
         for player in playersLeft:
@@ -557,6 +610,15 @@ class Main:
         global bullets
 
         try:
+            # Regenerating spawn point if there's a block at spawnpoint coordinates.
+            if self.level.level[self.spawn.x, self.spawn.y] != 'grass':
+                created = False
+                while not created:
+                    x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
+                    if self.level.level[x, y] in ['grass', 'wooden_door_opened']:
+                        self.spawn = Spawnpoint(x, y)
+                        created = True
+
             # Accepting clients
             self.__acceptNewClients()
             self.__updateClients()
@@ -564,11 +626,15 @@ class Main:
 
             # Spawning chests ( only if there is at least one player online )
             if time.time() - self.lastBoostSpawn >= 60 and self.getPlayersOnline() > 0:
-                x, y = random.randint(0, MAP_W-1), random.randint(0, MAP_H-1)
-                if random.randint(0, 4) == 0:
-                    self.level.setBlock(x, y, 'heart')
-                else:
-                    self.level.createChest(x, y)
+                spawned = False
+                while not spawned:
+                    x, y = random.randint(0, MAP_W-1), random.randint(0, MAP_H-1)
+                    if self.level.level[x, y] == 'grass':
+                        if random.randint(0, 4) == 0:
+                            self.level.setBlock(x, y, 'heart')
+                        else:
+                            self.level.createChest(x, y)
+                        spawned = True
 
                 self.lastBoostSpawn = time.time()
 
