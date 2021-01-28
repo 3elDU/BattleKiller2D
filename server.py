@@ -91,7 +91,11 @@ class Client:
 
         print("Client #" + str(self.clientID) + " connected: ", self.a)
 
-    def sendMessage(self, msg: str, color=(0, 0, 255)):
+        self.sendMessage(main.config.get('welcome_message'))
+
+    def sendMessage(self, msg: str, color=(0, 0, 255), prefix=False):
+        if prefix:
+            msg = main.config.get('service_message_prefix') + msg
         self.serviceMessages.append([msg, color])
 
     def setPosition(self, x: int, y: int):
@@ -123,6 +127,7 @@ class Client:
                     self.lastAliveMessage = time.time()
 
                 elif '/command' in message:
+                    print("Command from ", self.getNickname(), message)
                     cmd = message.replace('/command ', '')
                     commandsFromClients.append([self.clientID, cmd])
 
@@ -131,10 +136,10 @@ class Client:
                     players[self.clientID].active = False
                     playersLeft.append(self.clientID)
                     self.s.close()
-                    print("Client #" + str(self.clientID) + " disconnected: ", self.a)
+                    print(self.getNickname(), "with address", self.a, "disconnected.")
 
                 elif message == 'get_level':
-                    print("Client", self.clientID, "loaded the map.")
+                    print(self.getNickname(), "loaded the map.")
                     self.dataToSend.append('map' + str(main.level.level))
 
                 elif message == 'get_objects':
@@ -242,13 +247,13 @@ class Client:
 
                 else:
                     if message:
-                        print("Client #" + str(self.clientID) + ":", message)
+                        print(self.getNickname(), ":", message)
                         newMessages.append([self.clientID, message])
 
             self.__messagesFromClient.clear()
 
         except Exception as e:
-            print("Exception while handling client #", self.clientID, "messages:\n", e)
+            print("Exception while handling", self.getNickname(), "'s messages:\n", e)
             print()
             traceback.print_exc()
 
@@ -270,8 +275,7 @@ class Client:
         else:
             # Disconnecting client if it is not responding for 10 seconds.
             if time.time() - self.lastAliveMessage >= 10:
-                print("Client #" + str(self.clientID) +
-                      " has been not responding for 10 seconds! Disconnecting him/her.")
+                print(self.getNickname(), "has been not responding for 10 seconds! Disconnecting him/her.")
 
                 try:
                     self.disconnect(reason='Timed out.')
@@ -311,13 +315,16 @@ class Client:
                     except socket.error:
                         pass
                     except Exception as e:
-                        print("Error while sending data to client: ", e)
+                        print("Error while sending data to", self.getNickname(), e)
             except socket.error:
                 pass
             except Exception as e:
                 print("Ex", e)
 
-    def disconnect(self, reason='Server was shut down.'):
+    def disconnect(self, reason=None):
+        if reason is None:
+            reason = main.config.get('shutdown_message')
+
         global players
         try:
             players[self.clientID].active = False
@@ -329,7 +336,7 @@ class Client:
             self.s.send(msg.encode('utf-8'))
             self.disconnected = True
         except Exception as e:
-            print("Exception while trying to disconnect client" + str(self.clientID), e)
+            print("Exception while trying to disconnect", self.getNickname(), e)
 
 
 class Level:
@@ -360,14 +367,20 @@ class Level:
             changedBlocks.append([x, y, b])
 
     def generateLevel(self):
+        gen_start = time.time()
+
         for x in range(MAP_W):
             for y in range(MAP_H):
                 self.generateBlock(x, y)
         self.level[0, 0] = 'grass'
 
+        gen_end = time.time()
+
         self.__generated = True
 
         # print(self.level)
+
+        print("Level has been successfully generated in", gen_end-gen_start, "seconds")
 
     def createChest(self, x, y,
                     lootTable=None, maxItems=8) -> str:
@@ -402,7 +415,7 @@ class Level:
 
                     created = True
 
-        print(m)
+        # print(m)
 
         self.level[x, y] = m
         if self.__generated:
@@ -416,30 +429,47 @@ class Spawnpoint:
         self.x, self.y = x, y
 
 
+class Config:
+    def __init__(self, filename=''):
+        try:
+            f = open(filename, 'r', encoding='utf-8')
+            self.__config = eval(f.read())
+            f.close()
+        except Exception as e:
+            print("Exception while reading config:", e)
+
+    def get(self, v) -> str:
+        try:
+            return self.__config[v]
+        except:
+            return ''
+
+
 class Main:
     def __init__(self):
         global main
         main = self
 
         # Generating level
+        print("Initializing level")
         self.level = Level()
+        print("Generating level")
         self.level.generateLevel()
 
         # Creating socket object
+        print("Creating socket")
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         # Reading user's ip and port from settings file
+        print("Reading server preferences")
+        self.config = Config('server_settings.txt')
         try:
-            file = open('server_settings.txt', 'r')
-            self.settings = eval(file.read())
-            file.close()
-
-            self.ip = self.settings['ip']
+            self.ip = self.config.get('ip')
             if self.ip == '':
                 self.ip = socket.gethostbyname(socket.gethostname())
 
-            self.port = self.settings['port']
+            self.port = self.config.get('port')
             if self.port == '':
                 self.port = 25000
             else:
@@ -453,9 +483,11 @@ class Main:
         print("Starting server on:\nip", self.ip, "\nport", self.port)
 
         # Binding socket
+        print("Binding socket")
         self.s.bind((self.ip, self.port))
 
         # Starting to listen to new clients
+        print("Starting to listen to clients")
         self.s.listen(16384)
 
         # Setting socket mode to "non-blocking" which allows us to skip waiting for a new message
@@ -467,8 +499,10 @@ class Main:
         self.clients: [Client]
 
         # Spawnpoint where joined players will appear
+        print("Creating spawnpoint ", end='')
         self.spawn = Spawnpoint(random.randint(0, MAP_W-1), random.randint(0, MAP_H-1))
         self.level.level[self.spawn.x, self.spawn.y] = 'grass'
+        print("at", self.spawn.x, self.spawn.y)
 
         self.lastBulletUpdate = time.time()
         self.lastBoostSpawn = time.time()
@@ -506,8 +540,10 @@ class Main:
             sock, addr = self.s.accept()
             sock.setblocking(False)
 
+            print("New player has joined, initializing player and client")
+
             i = len(players)
-            players[i] = Player(0, 0, 'grass', 100)
+            players[i] = Player(0, 0, 'grass', 100, str(i))
 
             client = Client(sock, addr, i)
             client.setPosition(self.spawn.x, self.spawn.y)
@@ -612,6 +648,7 @@ class Main:
         try:
             # Regenerating spawn point if there's a block at spawnpoint coordinates.
             if self.level.level[self.spawn.x, self.spawn.y] != 'grass':
+                print("Spawnpoint was blocked, regenerating it")
                 created = False
                 while not created:
                     x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
@@ -623,16 +660,20 @@ class Main:
             self.__acceptNewClients()
             self.__updateClients()
             self.__updateChangedData()
+            self.__processCommands()
 
             # Spawning chests ( only if there is at least one player online )
             if time.time() - self.lastBoostSpawn >= 60 and self.getPlayersOnline() > 0:
+                print("Spawning new ", end='')
                 spawned = False
                 while not spawned:
                     x, y = random.randint(0, MAP_W-1), random.randint(0, MAP_H-1)
                     if self.level.level[x, y] == 'grass':
                         if random.randint(0, 4) == 0:
+                            print("health boost")
                             self.level.setBlock(x, y, 'heart')
                         else:
+                            print("chest")
                             self.level.createChest(x, y)
                         spawned = True
 
@@ -669,10 +710,13 @@ class GUI:
         self.result['text'] = 'Result: ' + str(exec(self.entry3.get('0.0', END)))
 
     def __init__(self):
+        print("Creating window")
         self.root = Tk()
 
+        print("Initializing Main")
         self.main = Main()
 
+        print("Creating widgets")
         self.button = Button(text="Stop the server.", command=self.stopServer, width=25)
         self.button.grid(row=0, column=0, padx=10, pady=10)
 
@@ -709,6 +753,9 @@ class GUI:
 
         self.evalFrame.grid(row=2, column=0, padx=10, pady=30)
 
+        self.root.protocol("WM_DELETE_WINDOW", self.stopServer)
+
+        print("Entering loop")
         self.alive = True
         self.loop()
 
@@ -718,24 +765,31 @@ class GUI:
                 self.main.update()
                 self.root.update()
             except KeyboardInterrupt:
-                self.alive = False
+                break
 
         self.main.shutDown()
         self.root.destroy()
 
 
 if __name__ == '__main__':
+    print("Reading server config at server_settings.txt")
     __f = open('server_settings.txt', 'r', encoding='utf-8')
     __c = eval(__f.read())
     __f.close()
 
+    __t_start = 0
+    __t_end = 0
+
     if __c['start_gui'] == 'yes':
+        print("Stating with gui")
         __t_start = time.time()
         gui = GUI()
         __t_end = time.time()
-    else:
+    elif __c['start_gui'] == 'no':
+        print("Starting without gui")
         __t_start = time.time()
         main = Main()
+        print("Entering loop")
         while True:
             try:
                 main.update()
@@ -743,6 +797,8 @@ if __name__ == '__main__':
                 main.shutDown()
                 break
         __t_end = time.time()
+    else:
+        print("Invalid config!")
 
     print("Server was running for", (__t_end - __t_start) // 60, "minutes and",
           round((__t_end - __t_start) % 60, 1), "seconds!")

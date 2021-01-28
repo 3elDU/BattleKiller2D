@@ -726,7 +726,8 @@ class ChatMenu:
                         return
                     elif e.key == pygame.K_RETURN:
                         self.c.sendMessage(self.userMessage)
-                        main.messages.append([main.c.clientId, self.userMessage, time.time(), 255, (0, 0, 0)])
+                        if self.quickMessage:
+                            main.messages.append(ChatMessage(self.userMessage, str(main.c.clientId)))
                         self.messages.append([main.c.clientId, self.userMessage, (0, 0, 0)])
                         self.userMessage = ''
                         if self.quickMessage and not e.mod & pygame.KMOD_CTRL and not e.mod & pygame.KMOD_SHIFT:
@@ -991,9 +992,9 @@ class Renderer:
         message: ChatMessage
         for message in main.messages:
             if not message.serviceMessage:
-                t = main.font.render("Player #" + str(message.sender) + " : " + message.message, True, message.color)
+                t = main.font.render(str(message.sender) + " : " + message.message, True, message.color)
             else:
-                t = main.font.render("server: " + str(message.message), True, message.color)
+                t = main.font.render(str(message.message), True, message.color)
 
             if message.alpha <= 255:
                 t.set_alpha(int(message.alpha))
