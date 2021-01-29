@@ -97,9 +97,10 @@ class Hammer(Item):
 
     def attack(self, bx, by, ox, oy):
         hit = None
-        for player in players:
-            if players[player].x == bx and players[player].y == by:
-                hit = player
+        for p in players:
+            player = players[p]
+            if player.x//80 == bx and player.y//80 == by:
+                hit = p
         if hit is not None:
             print("I'm attacking!")
             msg = 'attack' + str(hit) + '/' + str(random.randint(5, 20))
@@ -188,7 +189,7 @@ class SniperRifle(Item):
         hitBlock = False
 
         if not vertical:
-            for xx in range(main.x * 20, ox * 20, step):
+            for xx in range(int(main.x//BLOCK_W * 20), int(ox//BLOCK_W * 20), step):
                 x = xx / 20
 
                 y = m * x + b
@@ -209,9 +210,9 @@ class SniperRifle(Item):
             else:
                 step = 1
 
-            for y in range(main.y, oy, step):
+            for y in range(int(main.y // BLOCK_W), int(oy // BLOCK_H), step):
                 print(y)
-                if not main.map.level[main.x, y] == 'grass':
+                if not main.map.level[main.x//BLOCK_W, y//BLOCK_H] == 'grass':
                     print(main.x, y, main.map.level[main.x, y])
                     hitBlock = True
                     break
@@ -233,7 +234,7 @@ class SniperRifle(Item):
         if not hitBlock:
             hit = None
             for player in players:
-                if players[player].x == ox and players[player].y == oy:
+                if players[player].x // BLOCK_W == ox and players[player].y // BLOCK_H == oy:
                     hit = player
             if hit is not None:
                 print("I'm attacking!")
@@ -327,6 +328,9 @@ class MapManager:
         self.objects = {}
 
     def setBlock(self, x, y, block):
+        x = int(x)
+        y = int(y)
+
         # Playing sound if we break block
         if block == 'grass':
             main.sounds['block_break'].play()
@@ -426,14 +430,14 @@ class Client:
                                 self.clientId = int(s[1])
 
                             elif s[0] == 'setpos':
-                                main.x = int(s[1])
-                                main.y = int(s[2])
+                                main.movement.x = float(s[1]) * BLOCK_W + BLOCK_W//2
+                                main.movement.y = float(s[2]) * BLOCK_H + BLOCK_H//2
 
                             elif s[0] == 'b':
                                 bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
                                                       eval(s[7])))
                             elif s[0] == 'p':
-                                players[int(s[1])] = Player(int(s[2]), int(s[3]), s[4], eval(s[5]), int(s[6]))
+                                players[int(s[1])] = Player(float(s[2]), float(s[3]), s[4], eval(s[5]), int(s[6]))
                             elif s[0] == 'cb':
                                 main.map.level[int(s[1]), int(s[2])] = s[3]
                             elif s[0] == 'o':
@@ -868,13 +872,20 @@ class EventHandler:
                                     #                    + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
                                 elif pressed[2]:
                                     if not main.inventory.inventoryItems[main.selectedSlot].specialItem:
-                                        if main.map.level[resX, resY] == 'grass' and \
-                                                main.inventory.inventoryItems[main.selectedSlot].count > 0:
-                                            main.map.setBlock(resX, resY,
-                                                              main.inventory.inventoryItems[main.selectedSlot].name)
 
-                                            main.inventory.removeItem(
-                                                Item(main.inventory.inventoryItems[main.selectedSlot].name, '', 1))
+                                        if main.map.level[resX, resY] == 'grass' and \
+                                           main.inventory.inventoryItems[main.selectedSlot].count > 0:
+                                            main.map.level[resX, resY] = \
+                                                main.inventory.inventoryItems[main.selectedSlot].name
+
+                                            if main.movement.canStepOn(main.pixelx, main.pixely):
+                                                main.map.setBlock(resX, resY,
+                                                                  main.inventory.inventoryItems[main.selectedSlot].name)
+
+                                                main.inventory.removeItem(
+                                                    Item(main.inventory.inventoryItems[main.selectedSlot].name, '', 1))
+                                            else:
+                                                main.map.level[resX, resY] = 'grass'
                                     else:
                                         main.inventory.inventoryItems[main.selectedSlot].use(
                                             resX, resY, x // BLOCK_W, y // BLOCK_H)
@@ -890,24 +901,16 @@ class EventHandler:
 
             if keys[pygame.K_w]:
                 if main.y > 0:
-                    if main.map.level[main.x, main.y - 1] in ['grass', 'wooden_door_opened']:
-                        main.y -= 1
-                        self.lastMovement = time.time()
+                    main.movement.addVelocity(0, -1)
             if keys[pygame.K_a]:
                 if main.x > 0:
-                    if main.map.level[main.x - 1, main.y] in ['grass', 'wooden_door_opened']:
-                        main.x -= 1
-                        self.lastMovement = time.time()
+                    main.movement.addVelocity(-1, 0)
             if keys[pygame.K_s]:
-                if main.y < MAP_H - 1:
-                    if main.map.level[main.x, main.y + 1] in ['grass', 'wooden_door_opened']:
-                        main.y += 1
-                        self.lastMovement = time.time()
+                if main.y < MAP_H*BLOCK_H:
+                    main.movement.addVelocity(0, 1)
             if keys[pygame.K_d]:
-                if main.x < MAP_W - 1:
-                    if main.map.level[main.x + 1, main.y] in ['grass', 'wooden_door_opened']:
-                        main.x += 1
-                        self.lastMovement = time.time()
+                if main.x < MAP_W*BLOCK_W:
+                    main.movement.addVelocity(1, 0)
 
 
 class Renderer:
@@ -930,27 +933,26 @@ class Renderer:
             player = players[p]
             if player.active:
                 self.sc.blit(main.textures[player.texture],
-                             main.textures[player.texture].get_rect(topleft=(player.x * BLOCK_W,
-                                                                             player.y * BLOCK_H)))
-                pygame.draw.rect(self.sc, (0, 0, 0), (
-                    player.x * BLOCK_W - 3, player.y * BLOCK_H - (BLOCK_H // 8) - 3, BLOCK_W + 6, BLOCK_H // 8 + 6))
+                             main.textures[player.texture].get_rect(center=(player.x, player.y)))
+                pygame.draw.rect(self.sc, (0, 0, 0),
+                                 (player.x - 3 - BLOCK_W // 2, player.y - 3 - BLOCK_H // 2, BLOCK_W + 6,
+                                  BLOCK_H // 8 + 6))
                 pygame.draw.rect(self.sc, (255, 0, 0), (
-                    player.x * BLOCK_W, player.y * BLOCK_H - (BLOCK_H // 8), int(player.health * 0.8),
-                    BLOCK_H // 8))
+                    player.x - BLOCK_W // 2, player.y - BLOCK_H // 2, int(player.health * 0.8), BLOCK_H // 8))
 
         self.sc.blit(main.textures['arrow'],
-                     main.textures['arrow'].get_rect(center=(main.x * BLOCK_W + BLOCK_W // 2,
-                                                             main.y * BLOCK_H + BLOCK_H // 2)))
+                     main.textures['arrow'].get_rect(center=(main.pixelx,
+                                                             main.pixely)))
 
         self.sc.blit(main.textures[main.playerClass.texture],
                      main.textures[main.playerClass.texture].get_rect(
-                         topleft=(main.x * BLOCK_W, main.y * BLOCK_H)
+                         center=(main.pixelx, main.pixely)
                      ))
         pygame.draw.rect(self.sc, (0, 0, 0),
-                         (main.x * BLOCK_W - 3, main.y * BLOCK_H - (BLOCK_H // 8) - 3, BLOCK_W + 6,
+                         (main.pixelx - 3 - BLOCK_W//2, main.pixely - 3 - BLOCK_H//2, BLOCK_W + 6,
                           BLOCK_H // 8 + 6))
         pygame.draw.rect(self.sc, (0, 255, 0), (
-            main.x * BLOCK_W, main.y * BLOCK_H - (BLOCK_H // 8), int(health * 0.8), BLOCK_H // 8))
+            main.pixelx - BLOCK_W//2, main.pixely - BLOCK_H//2, int(health * 0.8), BLOCK_H // 8))
 
         for obj in main.map.objects:
             if main.map.objects[obj].active:
@@ -1071,6 +1073,93 @@ class ClassChooser:
         return PlayerClass(classes[variant][2][0](), classes[variant][1], classes[variant][0])
 
 
+class CollisionDetection:
+    def __init__(self, x=0, y=0):
+        self.x = x
+        self.y = y
+
+        self.xvel = 0  # X velocity
+        self.yvel = 0  # Y velocity
+
+    def addVelocity(self, x=0, y=0):
+        self.xvel += x
+        self.yvel += y
+
+    def update(self):
+        # print(self.xvel, self.yvel, end=' ')
+
+        self.x = self.clamp(self.x, -1, MAP_W*BLOCK_W)
+        self.y = self.clamp(self.y, -1, MAP_H*BLOCK_H)
+
+        self.xvel = self.clamp(self.xvel, -2, 2)
+        self.yvel = self.clamp(self.yvel, -2, 2)
+
+        # print(self.xvel, self.yvel)
+
+        if self.canStepOn(self.x+self.xvel, self.y):
+            self.x += self.xvel
+        else: self.xvel = 0
+        if self.canStepOn(self.x, self.y+self.yvel):
+            self.y += self.yvel
+        else: self.yvel = 0
+
+        self.xvel *= 0.9
+        self.yvel *= 0.9
+
+        if -0.01 <= self.xvel <= 0.01: self.xvel = 0
+        if -0.01 <= self.yvel <= 0.01: self.yvel = 0
+
+    def getPos(self) -> (int, int):
+        return self.x, self.y
+
+    @staticmethod
+    def playerIsCollidingWith(x, y, playerX=None, playerY=None):
+        points = [
+            (playerX - BLOCK_W // 3, playerY - BLOCK_H // 3),  # Upleft
+            (playerX + BLOCK_W // 3, playerY - BLOCK_H // 3),  # Upright
+            (playerX - BLOCK_W // 3, playerY + BLOCK_H // 3),  # Downleft
+            (playerX + BLOCK_W // 3, playerY + BLOCK_H // 3)  # Downright
+        ]
+
+        if (x, y) in points: return True
+        else: return False
+
+
+    @staticmethod
+    def clamp(val, mn, mx):
+        if val > mx: return mx
+        elif val < mn: return mn
+        else: return val
+
+    @staticmethod
+    def canStepOn(x, y):
+        # p = []
+        # if self.xvel > 0.1 and self.yvel == 0: # Moving right
+        #     p.append([x + BLOCK_W//3, y - BLOCK_H//3])
+        #     p.append([x + BLOCK_W//3, y + BLOCK_H//3])
+        # if self.xvel > 0.1 and self.yvel > 0.1: # Moving downright
+        #     p.append([])
+
+        points = [
+            (x - BLOCK_W//3, y - BLOCK_H//3),  # Upleft
+            (x + BLOCK_W//3, y - BLOCK_H//3),  # Upright
+            (x - BLOCK_W//3, y + BLOCK_H//3),  # Downleft
+            (x + BLOCK_W//3, y + BLOCK_H//3)   # Downright
+        ]
+
+        for point in points:
+            if 0 <= point[0] <= MAP_W*BLOCK_W and 0 <= point[1] <= MAP_H*BLOCK_H:
+                if not main.map.level[int(point[0]//BLOCK_W), int(point[1]//BLOCK_H)] in [
+                    'wooden_door_opened',
+                    'grass'
+                ]:
+                    return False
+            else:
+                return False
+
+        return True
+
+
 class Main:
     def loadConfig(self):
         try:
@@ -1130,7 +1219,9 @@ class Main:
         self.renderer = Renderer()
 
         # Player position
+        self.movement = CollisionDetection(0, 0)
         self.x, self.y = 0, 0
+        self.pixelx, self.pixely = 0, 0
         # For continuous movement
         self.lastMovement = time.time()
 
@@ -1167,15 +1258,22 @@ class Main:
             pass
 
         while self.running:
+            self.pixelx, self.pixely = self.movement.getPos()
+            x, y = int(self.pixelx // BLOCK_W), int(self.pixely // BLOCK_H)
+            self.x, self.y = x, y
+
             # listening for the events
             self.eventhandler.handleEvents()
+
+            self.movement.update()
 
             self.sc.fill((255, 255, 255))
 
             if not self.c.disconnected:
                 self.c.sendMessage(
-                    'set_player' + str(self.x) + '/' + str(self.y) + '/' + str(self.playerClass.texture) + '/' + str(
-                        health))
+                    'set_player' + str(self.pixelx) + '/' + str(self.pixely) + '/' +
+                    str(self.playerClass.texture) + '/' + str(health)
+                )
 
                 self.c.update()
 

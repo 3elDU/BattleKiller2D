@@ -200,7 +200,7 @@ class Client:
 
                     message = message.replace('set_player', '').split('/')
 
-                    p = Player(int(message[0]), int(message[1]), message[2], int(message[3]),
+                    p = Player(float(message[0]), float(message[1]), message[2], int(message[3]),
                                nickname=players[self.clientID].nickname)
 
                     players[self.clientID] = p
