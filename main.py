@@ -15,6 +15,97 @@ SCREEN_W = MAP_W * BLOCK_W
 SCREEN_H = (MAP_H + 1) * BLOCK_H
 
 
+class SoundStub:
+    def play(self, duration=0): pass
+
+
+class Block:
+    @staticmethod
+    def getBlockFromID(x, y, blockID: str):
+        if blockID == 'wall':
+            return StoneWall(x, y)
+        elif blockID == 'wooden_door_closed':
+            return Door(x, y)
+        elif blockID == 'wooden_door_opened':
+            d = Door(x, y)
+            d.interact()
+            return d
+        elif blockID == 'heart':
+            return Heart(x, y)
+        elif blockID.split(',')[0] == 'chest':
+            return Chest(x, y, blockID.replace('chest,', ''))
+        elif blockID == 'grass':
+            return Block(x, y, False, False, texture='grass',
+                         name='How you have mined glass block?')
+        else:
+            return Block(x, y, name='Undefined', texture=blockID)
+
+    def __init__(self, x, y, collidable=True, breakable=True, visible=True, texture='wall', name='Stone wall'):
+        self.collidable = collidable
+        self.breakable = breakable
+        self.visible = visible
+        self.texture = texture
+        self.name = name
+
+        self.x, self.y = x, y
+
+    def breakBlock(self) -> None:
+        main.inventory.addInventoryItem(Item(self.name, self.texture, 1, False))
+
+    def interact(self):
+        pass
+
+    def replaceWith(self, block) -> None:
+        main.map.setBlock(self.x, self.y, block)
+
+
+class StoneWall(Block):
+    def __init__(self, x, y):
+        Block.__init__(self, x, y)
+
+
+class Door(Block):
+    def __init__(self, x, y):
+        Block.__init__(self, x, y, texture='wooden_door_closed', name='Wooden door')
+
+        # Door state. False is closed, True is opened
+        self.state = False
+
+    def interact(self):
+        # Opening door if it is closed
+        if not self.state:
+            self.state = True
+            self.texture = 'wooden_door_opened'
+        # And closing, if it was opened
+        else:
+            self.state = False
+            self.texture = 'wooden_door_closed'
+
+
+class Chest(Block):
+    def __init__(self, x, y, items: str):
+        Block.__init__(self, x, y, texture='chest', name='Chest')
+
+        self.items = []
+        for item in items.split(','):
+            i = item.split('=')
+            if len(i) == 2:
+                self.items.append([i[0], int(i[1])])
+
+    def interact(self):
+        ChestMenu(main.sc, self.items, self.x, self.y)
+
+
+class Heart(Block):
+    def __init__(self, x, y):
+        Block.__init__(self, x, y, breakable=False, texture='heart')
+
+    def interact(self):
+        main.defenceLevel += 10
+        main.map.setBlock(self.x, self.y, 'grass')
+
+
+
 class ChatMessage:
     def __init__(self, message: str, sender: str = '',
                  color: tuple = (0, 0, 0), serviceMessage: bool = False, alpha: int = 255):
@@ -51,15 +142,9 @@ class Item:
 
     @staticmethod
     def interactWithBlock(x, y):
-        if main.map.level[x, y].split(',')[0] == 'chest':
-            items = main.map.level[x, y].split(',')[1::]
-            itemslist = []
-            for item in items:
-                i = item.split('=')
-                if len(i) == 2:
-                    itemslist.append([i[0], int(i[1])])
+        main.map.level[x, y].interact()
 
-            ChestMenu(main.sc, itemslist, x, y)
+        """
         elif main.map.level[x, y] == 'wooden_door_closed':
             main.map.setBlock(x, y, 'wooden_door_opened')
         elif main.map.level[x, y] == 'wooden_door_opened':
@@ -67,6 +152,7 @@ class Item:
         elif main.map.level[x, y] == 'heart':
             main.defenceLevel += 10
             main.map.setBlock(x, y, 'grass')
+        """
 
     def use(self, bx, by, ox, oy):
         self.interactWithBlock(ox, oy)
@@ -81,8 +167,8 @@ class Pickaxe(Item):
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
-        if not main.map.level[bx, by] == 'grass':
-            main.inventory.addInventoryItem(Item(main.map.level[bx, by], '', 1))
+        if not main.map.level[bx, by].texture == 'grass':
+            main.inventory.addInventoryItem(Item(main.map.level[bx, by].texture, '', 1))
         main.map.setBlock(bx, by, 'grass')
 
 
@@ -99,7 +185,7 @@ class Hammer(Item):
         hit = None
         for p in players:
             player = players[p]
-            if player.x//80 == bx and player.y//80 == by:
+            if player.x // 80 == bx and player.y // 80 == by:
                 hit = p
         if hit is not None:
             print("I'm attacking!")
@@ -189,7 +275,7 @@ class SniperRifle(Item):
         hitBlock = False
 
         if not vertical:
-            for xx in range(int(main.x//BLOCK_W * 20), int(ox//BLOCK_W * 20), step):
+            for xx in range(int(main.x // BLOCK_W * 20), int(ox // BLOCK_W * 20), step):
                 x = xx / 20
 
                 y = m * x + b
@@ -212,7 +298,7 @@ class SniperRifle(Item):
 
             for y in range(int(main.y // BLOCK_W), int(oy // BLOCK_H), step):
                 print(y)
-                if not main.map.level[main.x//BLOCK_W, y//BLOCK_H] == 'grass':
+                if not main.map.level[main.x // BLOCK_W, y // BLOCK_H] == 'grass':
                     print(main.x, y, main.map.level[main.x, y])
                     hitBlock = True
                     break
@@ -324,6 +410,7 @@ class Inventory:
 
 class MapManager:
     def __init__(self):
+        self.level = {int: Block}
         self.level = {}
         self.objects = {}
 
@@ -331,14 +418,22 @@ class MapManager:
         x = int(x)
         y = int(y)
 
+        if type(block) == Block:
+            bl = block
+            bl.x, bl.y = x, y
+        elif type(block) == str:
+            bl = Block.getBlockFromID(x, y, block)
+        else:
+            return
+
         # Playing sound if we break block
-        if block == 'grass':
+        if bl.texture == 'grass':
             main.sounds['block_break'].play()
         else:
             main.sounds['block_place'].play()
 
-        self.level[x, y] = block
-        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(block))
+        self.level[x, y] = bl
+        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(bl.texture))
 
     def createObject(self, x, y, texture):
         self.objects[x, y] = Object(x, y, texture)
@@ -394,14 +489,18 @@ class Client:
                 if 'map' in msg:
                     msg = msg.replace('map', '')
                     try:
-                        main.map.level = eval(msg)
+                        level = eval(msg)
+                        for x, y in level:
+                            main.map.level[x, y] = Block.getBlockFromID(x, y, level[x, y])
+
                         received = True
                         print("Level loaded.")
                     except Exception as e:
                         print("Error while trying to load level:", e)
+                        traceback.print_exc()
 
     def setNickname(self, nickname: str):
-        self.sendMessage('set_nick/'+str(nickname))
+        self.sendMessage('set_nick/' + str(nickname))
 
     def update(self):
         global players
@@ -430,8 +529,8 @@ class Client:
                                 self.clientId = int(s[1])
 
                             elif s[0] == 'setpos':
-                                main.movement.x = float(s[1]) * BLOCK_W + BLOCK_W//2
-                                main.movement.y = float(s[2]) * BLOCK_H + BLOCK_H//2
+                                main.movement.x = float(s[1]) * BLOCK_W + BLOCK_W // 2
+                                main.movement.y = float(s[2]) * BLOCK_H + BLOCK_H // 2
 
                             elif s[0] == 'b':
                                 bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
@@ -439,7 +538,7 @@ class Client:
                             elif s[0] == 'p':
                                 players[int(s[1])] = Player(float(s[2]), float(s[3]), s[4], eval(s[5]), int(s[6]))
                             elif s[0] == 'cb':
-                                main.map.level[int(s[1]), int(s[2])] = s[3]
+                                main.map.level[int(s[1]), int(s[2])] = Block.getBlockFromID(int(s[1]), int(s[2]), s[3])
                             elif s[0] == 'o':
                                 main.map.objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
                                 main.map.objects[int(s[1]), int(s[2])].active = eval(s[4])
@@ -514,7 +613,7 @@ class ChestMenu:
         while True:
             main.c.update()
 
-            if main.map.level[self.x, self.y].split(',')[0] != 'chest':
+            if main.map.level[self.x, self.y].texture != 'chest':
                 return
 
             for e in pygame.event.get():
@@ -666,7 +765,8 @@ class InputPrompt:
         self.__prompt = message
         self.__input = ''
 
-    def getInput(self): return self.__input
+    def getInput(self):
+        return self.__input
 
     def show(self):
         while True:
@@ -687,8 +787,9 @@ class InputPrompt:
             self.sc.fill((200, 200, 200))
 
             msg = main.font.render(self.__prompt, True, (0, 0, 0))
-            msgr = msg.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H))
-            pygame.draw.rect(self.sc, (100, 100, 100), (msgr.left-20, msgr.top-20, msgr.width+40, msgr.height+40))
+            msgr = msg.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2 - BLOCK_H))
+            pygame.draw.rect(self.sc, (100, 100, 100),
+                             (msgr.left - 20, msgr.top - 20, msgr.width + 40, msgr.height + 40))
             self.sc.blit(msg, msgr)
 
             inp = main.font.render(self.__input, True, (0, 0, 0))
@@ -856,7 +957,9 @@ class EventHandler:
                         resX = main.x + movX
                         resY = main.y + movY
 
+                        # Handling left and right mouse buttons presses
                         if not (movX == 0 and movY == 0) and 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
+                            # If there's no item in inventory, using "imaginary" pickaxe
                             if len(main.inventory.inventoryItems) == 0:
                                 i = Item('pickaxe', 'pickaxe', 1)
                                 if pressed[0]:
@@ -864,31 +967,43 @@ class EventHandler:
                                 elif pressed[2]:
                                     i.use(resX, resY, resX, resY)
                             else:
+                                # If left button was pressed
                                 if pressed[0]:
                                     main.inventory.inventoryItems[main.selectedSlot].attack(
-                                        resX, resY, x // BLOCK_W, y // BLOCK_H)
+                                        resX, resY, x // BLOCK_W, y // BLOCK_H
+                                    )
 
-                                    # self.c.sendMessage('shoot' + str(self.x + movX) + '/' + str(self.y + movY)
-                                    #                    + '/' + str(movX) + '/' + str(movY) + '/(0,0,0)')
+                                # If right button was pressed
                                 elif pressed[2]:
-                                    if not main.inventory.inventoryItems[main.selectedSlot].specialItem:
 
-                                        if main.map.level[resX, resY] == 'grass' and \
-                                           main.inventory.inventoryItems[main.selectedSlot].count > 0:
+                                    # If this is just a block, not a special item, then placing it.
+                                    # If it is an item, using it.
+                                    if main.inventory.inventoryItems[main.selectedSlot].specialItem:
+                                        main.inventory.inventoryItems[main.selectedSlot].use(
+                                            resX, resY, x // BLOCK_W, y // BLOCK_H)
+                                    else:
+
+                                        # We will place the block only on grass, we won't replace other blocks
+                                        if main.map.level[resX, resY].texture == 'grass' and \
+                                                main.inventory.inventoryItems[main.selectedSlot].count > 0:
+
+                                            # Checking if newly placed block won't overlap player's hitbox, so
+                                            # player won't get stuck in the block
                                             main.map.level[resX, resY] = \
-                                                main.inventory.inventoryItems[main.selectedSlot].name
+                                                Block.getBlockFromID(resX, resY,
+                                                                     main.inventory.inventoryItems[
+                                                                         main.selectedSlot].name)
 
                                             if main.movement.canStepOn(main.pixelx, main.pixely):
+                                                # If everything's alright, placing the block,
+                                                # and decrementing it's count in inventory
                                                 main.map.setBlock(resX, resY,
                                                                   main.inventory.inventoryItems[main.selectedSlot].name)
 
                                                 main.inventory.removeItem(
                                                     Item(main.inventory.inventoryItems[main.selectedSlot].name, '', 1))
                                             else:
-                                                main.map.level[resX, resY] = 'grass'
-                                    else:
-                                        main.inventory.inventoryItems[main.selectedSlot].use(
-                                            resX, resY, x // BLOCK_W, y // BLOCK_H)
+                                                main.map.level[resX, resY] = Block.getBlockFromID(resX, resY, 'grass')
 
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_r:
@@ -906,10 +1021,10 @@ class EventHandler:
                 if main.x > 0:
                     main.movement.addVelocity(-1, 0)
             if keys[pygame.K_s]:
-                if main.y < MAP_H*BLOCK_H:
+                if main.y < MAP_H * BLOCK_H:
                     main.movement.addVelocity(0, 1)
             if keys[pygame.K_d]:
-                if main.x < MAP_W*BLOCK_W:
+                if main.x < MAP_W * BLOCK_W:
                     main.movement.addVelocity(1, 0)
 
 
@@ -918,17 +1033,20 @@ class Renderer:
         self.sc = main.sc
 
     def renderGame(self):
+        # Rendering map
         for x in range(MAP_W):
             for y in range(MAP_H):
-                t = main.textures[main.map.level[x, y].split(',')[0]]
+                t = main.textures[main.map.level[x, y].texture.split(',')[0]]
                 self.sc.blit(t, t.get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
 
+        # Rendering bullets
         for bullet in bullets:
             if bullet.active:
                 pygame.draw.rect(self.sc, bullet.color, (bullet.x * BLOCK_W + (BLOCK_W // 4),
                                                          bullet.y * BLOCK_H + (BLOCK_H // 4),
                                                          40, 40))
 
+        # Rendering enemies ( other players )
         for p in players:
             player = players[p]
             if player.active:
@@ -940,29 +1058,36 @@ class Renderer:
                 pygame.draw.rect(self.sc, (255, 0, 0), (
                     player.x - BLOCK_W // 2, player.y - BLOCK_H // 2, int(player.health * 0.8), BLOCK_H // 8))
 
+        # Rendering "Shadow" under the player to see him easily.
         self.sc.blit(main.textures['arrow'],
                      main.textures['arrow'].get_rect(center=(main.pixelx,
                                                              main.pixely)))
 
+        # Rendering our player
         self.sc.blit(main.textures[main.playerClass.texture],
                      main.textures[main.playerClass.texture].get_rect(
                          center=(main.pixelx, main.pixely)
                      ))
+
+        # Rendering our player HP indicator ( on his head )
         pygame.draw.rect(self.sc, (0, 0, 0),
-                         (main.pixelx - 3 - BLOCK_W//2, main.pixely - 3 - BLOCK_H//2, BLOCK_W + 6,
+                         (main.pixelx - 3 - BLOCK_W // 2, main.pixely - 3 - BLOCK_H // 2, BLOCK_W + 6,
                           BLOCK_H // 8 + 6))
         pygame.draw.rect(self.sc, (0, 255, 0), (
-            main.pixelx - BLOCK_W//2, main.pixely - BLOCK_H//2, int(health * 0.8), BLOCK_H // 8))
+            main.pixelx - BLOCK_W // 2, main.pixely - BLOCK_H // 2, int(health * 0.8), BLOCK_H // 8))
 
+        # Rendering objects
         for obj in main.map.objects:
             if main.map.objects[obj].active:
                 self.sc.blit(main.textures[main.map.objects[obj].texture],
                              main.textures[main.map.objects[obj].texture].get_rect(
                                  topleft=(main.map.objects[obj].x, main.map.objects[obj].y)))
 
+        # Rendering inventory background
         pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H * BLOCK_H], [MAP_W * BLOCK_W, MAP_H * BLOCK_H])
         pygame.draw.rect(self.sc, (255, 255, 255), (0, MAP_H * BLOCK_W, SCREEN_W, BLOCK_H))
 
+        # Rendering inventory items
         for slot in range(len(main.inventory.inventoryItems)):
             if slot == main.selectedSlot:
                 self.sc.blit(main.textures[main.inventory.inventoryItems[slot].name.split(',')[0]],
@@ -979,6 +1104,7 @@ class Renderer:
                 r = t.get_rect(center=(slot * BLOCK_W + BLOCK_W // 2, MAP_H * BLOCK_H + 18))
                 self.sc.blit(t, r)
 
+        # Rendering various texts
         t = main.font.render(main.localization['health'] + str(health), True, (0, 0, 0))
         r = t.get_rect(topleft=(0, 0))
         self.sc.blit(t, r)
@@ -991,6 +1117,7 @@ class Renderer:
         r = t.get_rect(topleft=(4 * BLOCK_W, 0))
         self.sc.blit(t, r)
 
+        # Rendering messages
         message: ChatMessage
         for message in main.messages:
             if not message.serviceMessage:
@@ -1010,6 +1137,7 @@ class Renderer:
             if message.alpha <= 0:
                 main.messages.remove(message)
 
+        # Rendering red "cursor" under the actual cursor.
         mouse = pygame.mouse.get_pos()
         pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
 
@@ -1088,20 +1216,22 @@ class CollisionDetection:
     def update(self):
         # print(self.xvel, self.yvel, end=' ')
 
-        self.x = self.clamp(self.x, -1, MAP_W*BLOCK_W)
-        self.y = self.clamp(self.y, -1, MAP_H*BLOCK_H)
+        self.x = self.clamp(self.x, -1, MAP_W * BLOCK_W)
+        self.y = self.clamp(self.y, -1, MAP_H * BLOCK_H)
 
         self.xvel = self.clamp(self.xvel, -2, 2)
         self.yvel = self.clamp(self.yvel, -2, 2)
 
         # print(self.xvel, self.yvel)
 
-        if self.canStepOn(self.x+self.xvel, self.y):
+        if self.canStepOn(self.x + self.xvel, self.y):
             self.x += self.xvel
-        else: self.xvel = 0
-        if self.canStepOn(self.x, self.y+self.yvel):
+        else:
+            self.xvel = 0
+        if self.canStepOn(self.x, self.y + self.yvel):
             self.y += self.yvel
-        else: self.yvel = 0
+        else:
+            self.yvel = 0
 
         self.xvel *= 0.9
         self.yvel *= 0.9
@@ -1121,15 +1251,19 @@ class CollisionDetection:
             (playerX + BLOCK_W // 3, playerY + BLOCK_H // 3)  # Downright
         ]
 
-        if (x, y) in points: return True
-        else: return False
-
+        if (x, y) in points:
+            return True
+        else:
+            return False
 
     @staticmethod
     def clamp(val, mn, mx):
-        if val > mx: return mx
-        elif val < mn: return mn
-        else: return val
+        if val > mx:
+            return mx
+        elif val < mn:
+            return mn
+        else:
+            return val
 
     @staticmethod
     def canStepOn(x, y):
@@ -1141,18 +1275,15 @@ class CollisionDetection:
         #     p.append([])
 
         points = [
-            (x - BLOCK_W//3, y - BLOCK_H//3),  # Upleft
-            (x + BLOCK_W//3, y - BLOCK_H//3),  # Upright
-            (x - BLOCK_W//3, y + BLOCK_H//3),  # Downleft
-            (x + BLOCK_W//3, y + BLOCK_H//3)   # Downright
+            (x - BLOCK_W // 3, y - BLOCK_H // 3),  # Upleft
+            (x + BLOCK_W // 3, y - BLOCK_H // 3),  # Upright
+            (x - BLOCK_W // 3, y + BLOCK_H // 3),  # Downleft
+            (x + BLOCK_W // 3, y + BLOCK_H // 3)  # Downright
         ]
 
         for point in points:
-            if 0 <= point[0] <= MAP_W*BLOCK_W and 0 <= point[1] <= MAP_H*BLOCK_H:
-                if not main.map.level[int(point[0]//BLOCK_W), int(point[1]//BLOCK_H)] in [
-                    'wooden_door_opened',
-                    'grass'
-                ]:
+            if 0 <= point[0] <= MAP_W * BLOCK_W and 0 <= point[1] <= MAP_H * BLOCK_H:
+                if main.map.level[int(point[0] // BLOCK_W), int(point[1] // BLOCK_H)].collidable:
                     return False
             else:
                 return False
@@ -1186,7 +1317,10 @@ class Main:
         files = os.listdir('sounds/')
         self.sounds = {}
         for filename in files:
-            self.sounds[filename.split('.')[0]] = pygame.mixer.Sound('sounds/' + filename)
+            if not self.settings['disable_sound']:
+                self.sounds[filename.split('.')[0]] = pygame.mixer.Sound('sounds/' + filename)
+            else:
+                self.sounds[filename.split('.')[0]] = SoundStub()
 
     def __init__(self, surface):
         global main
@@ -1245,7 +1379,8 @@ class Main:
 
         # For fps displaying
         self.prevFrame = time.time()
-        self.fps = 1
+        self.fps = 0
+        self.__frames = 0
 
         self.defenceLevel = 0
 
@@ -1306,9 +1441,12 @@ class Main:
             if v > 0:
                 time.sleep(v)
 
-            self.fps = 1 / (time.time() - self.prevFrame)
+            if time.time() - self.prevFrame >= 1:
+                self.fps = self.__frames
+                self.__frames = 0
+                self.prevFrame = time.time()
 
-            self.prevFrame = time.time()
+            self.__frames += 1
 
 
 class StartMenu:

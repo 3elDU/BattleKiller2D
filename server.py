@@ -415,7 +415,7 @@ class Level:
 
                     created = True
 
-        # print(m)
+        print(m)
 
         self.level[x, y] = m
         if self.__generated:
