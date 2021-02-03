@@ -232,7 +232,7 @@ class Knife(Item):
     def attack(self, bx, by, ox, oy):
         hit = None
         for player in players:
-            if players[player].x == bx and players[player].y == by:
+            if players[player].x // BLOCK_W == bx and players[player].y // BLOCK_H == by:
                 hit = player
         if hit is not None:
             print("I'm attacking!")
@@ -263,6 +263,7 @@ class SniperRifle(Item):
         print('x1: ', main.x, 'y1: ', main.y, 'x2: ', ox, 'y2: ', oy)
         print('m: ', m)
         print('b: ', b)
+        print('vertical: ', vertical)
 
         step = 1
         if ox > main.x and oy > main.y:
@@ -275,13 +276,13 @@ class SniperRifle(Item):
         hitBlock = False
 
         if not vertical:
-            for xx in range(int(main.x // BLOCK_W * 20), int(ox // BLOCK_W * 20), step):
+            for xx in range(int(main.x * 20), int(ox * 20), step):
                 x = xx / 20
 
                 y = m * x + b
 
                 if 0 <= int(x) <= MAP_W and 0 <= int(y) <= MAP_H:
-                    if not main.map.level[int(x), int(y)] == 'grass':
+                    if not main.map.level[int(x), int(y)].texture == 'grass':
                         print(int(x), int(y), main.map.level[int(x), int(y)])
                         hitBlock = True
                         break
@@ -289,16 +290,13 @@ class SniperRifle(Item):
                 if not (int(x), int(y)) in changedBlocks:
                     changedBlocks.append((int(x), int(y)))
         else:
-            print("Vertical")
-
             if main.y > oy:
                 step = -1
             else:
                 step = 1
 
-            for y in range(int(main.y // BLOCK_W), int(oy // BLOCK_H), step):
-                print(y)
-                if not main.map.level[main.x // BLOCK_W, y // BLOCK_H] == 'grass':
+            for y in range(int(main.y), int(oy), step):
+                if not main.map.level[main.x, y].texture == 'grass':
                     print(main.x, y, main.map.level[main.x, y])
                     hitBlock = True
                     break
@@ -311,6 +309,7 @@ class SniperRifle(Item):
         else:
             main.sounds['sniper_rifle_shot'].play()
 
+        print('Hit block: ', hitBlock)
         print('Changed blocks: ', len(changedBlocks))
 
         # for block in changedBlocks:
