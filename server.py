@@ -36,29 +36,238 @@ class Damage:
         self.damager = damager
 
 
-players = {}
-players: {int: Player}
+class Game:
+    @staticmethod
+    def generateGameID() -> str:
+        return ''.join([random.choice(list('abcdef0123456789')) for _ in range(6)])
 
-bullets = []
-bullets: [Bullet]
+    def getGameIDString(self):
+        return '[ ' + self.name + '; ID ' + self.gameID + ' ]'
 
-objects = {}
-objects: {(int, int): Object}
+    """
+    name is string, name of the game, which will be displayed to other clients.
+    """
 
-changedBlocks = []
-changedObjects = []
-newMessages = []
+    def __init__(self, name: str):
+        self.players = []
 
-playersDamaged: [Damage]
-playersDamaged = []
-playersLeft = []
+        self.name = name
+        # Unique game id.
+        self.gameID = self.generateGameID()
 
-commandsFromClients = []
-serviceMessages = []
+        # Generating level
+        print("Initializing level for game", self.getGameIDString())
+        self.level = Level(self)
+        print("Generating level for game", self.getGameIDString())
+        self.level.generateLevel()
+
+        # Spawnpoint where joined players will appear
+        print("Creating spawnpoint ", end='')
+        self.spawn = Spawnpoint(random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1))
+        self.level.level[self.spawn.x, self.spawn.y] = 'grass'
+        print("at", self.spawn.x, self.spawn.y, "for game", self.getGameIDString())
+
+        self.lastBulletUpdate = time.time()
+        self.lastBoostSpawn = time.time()
+
+        self.bullets = []
+        self.bullets: [Bullet]
+
+        self.objects = {}
+        self.objects: {(int, int): Object}
+
+        self.changedBlocks = []
+        self.changedObjects = []
+        self.newMessages = []
+
+        self.playersDamaged: [Damage]
+        self.playersDamaged = []
+        self.playersLeft = []
+
+        self.commandsFromClients = []
+        self.serviceMessages = []
+
+        # For storing and normal handling of players.
+        # Each new player will be stored with key i+1
+        # So, for example first player will have key 0, second will have 1, and so on.
+        self.i = 0
+
+    def addPlayer(self, sock: socket.socket, addr: tuple):
+        player = Player(0, 0, 'grass', 100, str(self.i))
+
+        client = Client(sock, addr, player, self.i, self)
+        client.setPosition(self.spawn.x, self.spawn.y)
+        self.players.append(client)
+
+        self.i += 1
+
+    def getPlayersOnline(self) -> int:
+        playersOnline = 0
+        for client in self.players:
+            if client.player.active: playersOnline += 1
+
+        return playersOnline
+
+    def broadcastMessage(self, msg: str):
+        client: Client
+        for client in self.players:
+            client.sendMessage(msg)
+
+    def handleCommand(self, command: str) -> str:
+        try:
+            cmd = command.split(' ')
+            if cmd[0] == 'kick':
+                client: Client
+                for client in self.players:
+                    if client.clientID == int(cmd[1]):
+                        client.disconnect(reason=''.join([s + ' ' for s in cmd[2::]]))
+                        return 'Successfully kicked player #' + str(cmd[1])
+                return 'No player found with id #' + str(cmd[1])
+            else:
+                return 'Unknown command.'
+        except Exception as e:
+            return 'Exception has occurred: ' + str(e)
+
+    def __updateClients(self):
+        # Receiving new messages from clients
+        client: Client
+        for client in self.players:
+            try:
+                if client.player.active: client.update()
+            except Exception as e:
+                print("Exception was thrown while updating clients:\n", e)
+
+    def __updateChangedData(self):
+        for block in self.changedBlocks:
+            for client in self.players:
+                client.changedBlocks.append(block)
+        self.changedBlocks.clear()
+
+        for obj in self.changedObjects:
+            for client in self.players:
+                client.changedObjects.append(obj)
+        self.changedObjects.clear()
+
+        for msg in self.newMessages:
+            for client in self.players:
+                client.newMessages.append(msg)
+        self.newMessages.clear()
+
+        player: Damage
+        for player in self.playersDamaged:
+            print(player.damageAmount, player.damager, player.receiver)
+            self.players[player.receiver].dataToSend.append('bullet_hit/' + str(player.damageAmount))
+            if self.players[player.receiver].player.health - player.damageAmount <= 0:
+                self.broadcastMessage(
+                    self.players[player.receiver].getNickname() + ' was killed by ' +
+                    self.players[player.damager].getNickname())
+        self.playersDamaged.clear()
+
+        for player in self.playersLeft:
+            for client in self.players:
+                client.playersLeft.append(player)
+        self.playersLeft.clear()
+
+    def __processCommands(self):
+        for command in self.commandsFromClients:
+            print(command)
+            response = self.handleCommand(command[1])
+            print(response)
+            for client in self.players:
+                if client.clientID == command[0]:
+                    print(client.clientID)
+                    client.serviceMessages.append(response)
+        self.commandsFromClients.clear()
+
+    def __updateBullets(self):
+        if time.time() - self.lastBulletUpdate >= 1 / 5:
+            for i in range(len(self.bullets)):
+                bullet = self.bullets[i]
+                if bullet.active:
+                    # Checking if bullet is within borders of map
+                    if 0 <= bullet.x < MAP_W and 0 <= bullet.y < MAP_H and \
+                            self.level.level[bullet.x, bullet.y] in ['grass', 'wood']:
+                        # Checking if bullet hits someone
+                        hit = False
+
+                        j: Client
+                        for j in self.players:
+                            player = j.player
+                            if player.x == bullet.x and player.y == bullet.y \
+                                    and not (j.clientID == bullet.owner) and player.active:
+                                # Processing hit
+                                j.dataToSend.append('bullet_hit/10')
+                                self.bullets[i].active = False
+                                hit = True
+
+                        if not hit and self.level.level[bullet.x, bullet.y] == 'wood' and random.randint(0, 9) == 0:
+                            self.level.level[bullet.x, bullet.y] = 'grass'
+                            self.changedBlocks.append([bullet.x, bullet.y, 'grass'])
+                            self.bullets[i].active = False
+                        elif not self.level.level[bullet.x, bullet.y] == 'grass':
+                            self.bullets[i].active = False
+
+                        bullet.x += bullet.movX
+                        bullet.y += bullet.movY
+                    else:
+                        self.bullets[i].active = False
+
+            for bullet in self.bullets:
+                if not bullet.active:
+                    self.bullets.remove(bullet)
+
+            self.lastBulletUpdate = time.time()
+
+    def __deleteDisconnectedPlayers(self):
+        player: Client
+        for player in self.players:
+            if not player.player.active:
+                print(self.getGameIDString(), "Disconnecting inactive player (", player.getNickname(), ")")
+                self.players.remove(player)
+
+    def update(self) -> None:
+        try:
+            # Regenerating spawn point if there's a block at spawnpoint coordinates.
+            if self.level.level[self.spawn.x, self.spawn.y] != 'grass':
+                print("Spawnpoint was blocked, regenerating it")
+                created = False
+                while not created:
+                    x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
+                    if self.level.level[x, y] in ['grass', 'wooden_door_opened']:
+                        self.spawn = Spawnpoint(x, y)
+                        created = True
+
+            self.__updateClients()
+            self.__updateChangedData()
+            self.__processCommands()
+            # self.__deleteDisconnectedPlayers()
+
+            # Spawning chests ( only if there is at least one player online )
+            if time.time() - self.lastBoostSpawn >= 60 and self.getPlayersOnline() > 0:
+                print(self.getGameIDString(), "Spawning new ", end='')
+                spawned = False
+                while not spawned:
+                    x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
+                    if self.level.level[x, y] == 'grass':
+                        if random.randint(0, 4) == 0:
+                            print("health boost")
+                            self.level.setBlock(x, y, 'heart')
+                        else:
+                            print("chest")
+                            self.level.createChest(x, y)
+                        spawned = True
+
+                self.lastBoostSpawn = time.time()
+
+            self.__updateBullets()
+
+        except Exception as e:
+            print(self.getGameIDString(), "CRITICAL GAME ERROR: ", e)
+            traceback.print_exc()
 
 
 class Client:
-    def __init__(self, sock: socket.socket, addr: tuple, i: int):
+    def __init__(self, sock: socket.socket, addr: tuple, player: Player, i: int, game: Game):
         # all this sockety things
         self.s = sock
         self.s: socket.socket
@@ -68,6 +277,9 @@ class Client:
 
         self.clientID = i
         self.clientID: int
+
+        self.player = player
+        self.game = game
 
         self.disconnected = False
 
@@ -89,7 +301,7 @@ class Client:
 
         self.lastAliveMessage = time.time()
 
-        print("Client #" + str(self.clientID) + " connected: ", self.a)
+        print(self.game.getGameIDString(), "Client #" + str(self.clientID) + " connected: ", self.a)
 
         self.sendMessage(main.config.get('welcome_message'))
 
@@ -102,11 +314,10 @@ class Client:
         self.rawDataToSend.append('setpos/' + str(x) + '/' + str(y))
 
     def getNickname(self) -> str:
-        return players[self.clientID].nickname
+        return self.player.nickname
 
     def setNickname(self, nickname: str):
-        players[self.clientID].nickname = nickname
-
+        self.player.nickname = nickname
 
     def __receiveMessages(self) -> None:
         try:
@@ -118,7 +329,7 @@ class Client:
         except socket.error:
             pass
         except Exception as e:
-            print("Exception while receiving messages from client:", e)
+            print(self.game.getGameIDString(), "Exception while receiving messages from client:", e)
 
     def __handleMessages(self) -> None:
         try:
@@ -127,20 +338,20 @@ class Client:
                     self.lastAliveMessage = time.time()
 
                 elif '/command' in message:
-                    print("Command from ", self.getNickname(), message)
+                    print(self.game.getGameIDString(), "Command from ", self.getNickname(), message)
                     cmd = message.replace('/command ', '')
-                    commandsFromClients.append([self.clientID, cmd])
+                    self.game.commandsFromClients.append([self.clientID, cmd])
 
                 elif message == 'disconnect':
                     self.disconnected = True
-                    players[self.clientID].active = False
-                    playersLeft.append(self.clientID)
+                    self.player.active = False
+                    self.game.playersLeft.append(self.clientID)
                     self.s.close()
-                    print(self.getNickname(), "with address", self.a, "disconnected.")
+                    print(self.game.getGameIDString(), self.getNickname(), "with address", self.a, "disconnected.")
 
                 elif message == 'get_level':
-                    print(self.getNickname(), "loaded the map.")
-                    self.dataToSend.append('map' + str(main.level.level))
+                    print(self.game.getGameIDString(), self.getNickname(), "loaded the map.")
+                    self.dataToSend.append('map' + str(self.game.level.level))
 
                 elif message == 'get_objects':
                     m = ''
@@ -150,16 +361,16 @@ class Client:
                     for p in range(len(self.playersLeft)):
                         m += 'p/' + str(self.playersLeft[p]) + '/0/0/mage/False/0;'
 
-                    for p in range(len(players)):
-                        if p != self.clientID and players[p].active:
-                            player = players[p]
+                    for p in range(len(self.game.players)):
+                        if p != self.clientID and self.game.players[p].player.active:
+                            player = self.game.players[p].player
                             m += 'p/' + str(p) + '/' + str(player.x) + '/' + str(player.y) \
                                  + '/' + str(player.texture) + '/' + str(player.active) + '/' \
                                  + str(player.health) + ';'
 
-                    for bullet in range(len(bullets)):
-                        b = bullets[bullet]
-                        m += 'b/' + str(bullets.index(b)) + '/' + str(b.x) + '/' + str(b.y) \
+                    for bullet in range(len(self.game.bullets)):
+                        b = self.game.bullets[bullet]
+                        m += 'b/' + str(self.game.bullets.index(b)) + '/' + str(b.x) + '/' + str(b.y) \
                              + '/' + str(b.movX) + '/' + str(b.movY) \
                              + '/' + str(b.color) + '/' + str(b.active) + ';'
 
@@ -193,23 +404,23 @@ class Client:
                 elif 'set_nick' in message:
                     message = message.replace('set_nick/', '').split('/')
 
-                    players[self.clientID].nickname = message[0]
-                    print('Client #', self.clientID, 'set his nickname to', message[0])
+                    self.player.nickname = message[0]
+                    print(self.game.getGameIDString(), 'Client #', self.clientID, 'set his nickname to', message[0])
                 elif 'set_player' in message:
                     # print(message)
 
                     message = message.replace('set_player', '').split('/')
 
                     p = Player(float(message[0]), float(message[1]), message[2], int(message[3]),
-                               nickname=players[self.clientID].nickname)
+                               nickname=self.player.nickname)
 
-                    players[self.clientID] = p
+                    self.player = p
                 elif 'set_block' in message:
                     message = message.replace('set_block', '').split('/')
 
-                    main.level.level[int(message[0]), int(message[1])] = message[2]
+                    self.game.level.level[int(message[0]), int(message[1])] = message[2]
 
-                    changedBlocks.append([int(message[0]), int(message[1]), message[2]])
+                    self.game.changedBlocks.append([int(message[0]), int(message[1]), message[2]])
                 elif 'shoot' in message:
                     message = message.replace('shoot', '').split('/')
 
@@ -220,73 +431,64 @@ class Client:
 
                     # Checking if there's aren't any bullets that are in the same position as ours
                     same_pos = False
-                    for bullet in bullets:
+                    for bullet in self.game.bullets:
                         if bullet.x == b.x and bullet.y == b.y:
                             same_pos = True
 
                     if not same_pos:
-                        bullets.append(b)
+                        self.game.bullets.append(b)
                 elif 'create_object' in message:
                     message = message.replace('create_object', '').split('/')
 
-                    objects[int(message[0]), int(message[1])] = Object(int(message[0]), int(message[1]),
-                                                                       message[2])
+                    self.game.objects[int(message[0]), int(message[1])] = Object(int(message[0]), int(message[1]),
+                                                                                 message[2])
 
-                    changedObjects.append([int(message[0]), int(message[1]), message[2], True])
+                    self.game.changedObjects.append([int(message[0]), int(message[1]), message[2], True])
                 elif 'remove_object' in message:
                     message = message.replace('remove_object', '').split('/')
 
-                    objects[int(message[0]), int(message[1])].active = False
+                    self.game.objects[int(message[0]), int(message[1])].active = False
 
-                    changedObjects.append([int(message[0]), int(message[1]), '', False])
+                    self.game.changedObjects.append([int(message[0]), int(message[1]), '', False])
                 elif 'attack' in message:
                     message = message.replace('attack', '').split('/')
-                    global playersDamaged
 
-                    playersDamaged.append(Damage(int(message[1]), int(message[0]), self.clientID))
+                    self.game.playersDamaged.append(Damage(int(message[1]), int(message[0]), self.clientID))
 
                 else:
                     if message:
-                        print(self.getNickname(), ":", message)
-                        newMessages.append([self.clientID, message])
+                        print(self.game.getGameIDString(), self.getNickname(), ":", message)
+                        self.game.newMessages.append([self.clientID, message])
 
             self.__messagesFromClient.clear()
 
         except Exception as e:
-            print("Exception while handling", self.getNickname(), "'s messages:\n", e)
+            print(self.game.getGameIDString(), "Exception while handling", self.getNickname(), "'s messages:\n", e)
             print()
             traceback.print_exc()
 
-
     def getPlayer(self) -> Player:
-        return players[self.clientID]
+        return self.player
 
     def update(self) -> None:
-        global commandsFromClients
-        global changedBlocks
-        global newMessages
-        global playersLeft
-        global objects
-        global players
-        global bullets
-
         if self.disconnected:
-            players[self.clientID].active = False
+            self.player.active = False
         else:
             # Disconnecting client if it is not responding for 10 seconds.
             if time.time() - self.lastAliveMessage >= 10:
-                print(self.getNickname(), "has been not responding for 10 seconds! Disconnecting him/her.")
+                print(self.game.getGameIDString(),
+                      self.getNickname(), "has been not responding for 10 seconds! Disconnecting him/her.")
 
                 try:
                     self.disconnect(reason='Timed out.')
                 except Exception as e:
-                    print("Error while trying to send disconnect message:", e)
+                    print(self.game.getGameIDString(), "Error while trying to send disconnect message:", e)
 
                 self.disconnected = True
-                players[self.clientID].active = False
-                playersLeft.append(self.clientID)
+                self.player.active = False
+                self.game.playersLeft.append(self.clientID)
                 self.s.close()
-                print("Client #" + str(self.clientID) + " disconnected: ", self.a)
+                print(self.game.getGameIDString(), "Client #" + str(self.clientID) + " disconnected: ", self.a)
 
                 return
 
@@ -295,7 +497,7 @@ class Client:
 
                 self.__handleMessages()
             except Exception as e:
-                print("Exception in Client.update():", e)
+                print(self.game.getGameIDString(), "Exception in Client.update():", e)
                 traceback.print_exc()
 
             try:
@@ -315,20 +517,19 @@ class Client:
                     except socket.error:
                         pass
                     except Exception as e:
-                        print("Error while sending data to", self.getNickname(), e)
+                        print(self.game.getGameIDString(), "Error while sending data to", self.getNickname(), e)
             except socket.error:
                 pass
             except Exception as e:
-                print("Ex", e)
+                print(self.game.getGameIDString(), "Ex", e)
 
     def disconnect(self, reason=None):
         if reason is None:
             reason = main.config.get('shutdown_message')
 
-        global players
         try:
-            players[self.clientID].active = False
-            playersLeft.append(self.clientID)
+            self.player.active = False
+            self.game.playersLeft.append(self.clientID)
 
             self.s.setblocking(True)
 
@@ -336,11 +537,13 @@ class Client:
             self.s.send(msg.encode('utf-8'))
             self.disconnected = True
         except Exception as e:
-            print("Exception while trying to disconnect", self.getNickname(), e)
+            print(self.game.getGameIDString(), "Exception while trying to disconnect", self.getNickname(), e)
 
 
 class Level:
-    def __init__(self):
+    def __init__(self, game: Game):
+        self.game = game
+
         self.level: {(int, int): str}
         self.level = {}
 
@@ -348,7 +551,7 @@ class Level:
 
     def setBlock(self, x: int, y: int, block: str):
         self.level[x, y] = block
-        changedBlocks.append([x, y, block])
+        self.game.changedBlocks.append([x, y, block])
 
     def generateBlock(self, x, y):
         r = random.randint(0, 7)
@@ -364,7 +567,7 @@ class Level:
         self.level[x, y] = b
 
         if self.__generated:
-            changedBlocks.append([x, y, b])
+            self.game.changedBlocks.append([x, y, b])
 
     def generateLevel(self):
         gen_start = time.time()
@@ -380,7 +583,7 @@ class Level:
 
         # print(self.level)
 
-        print("Level has been successfully generated in", gen_end-gen_start, "seconds")
+        print("Level has been successfully generated in", gen_end - gen_start, "seconds")
 
     def createChest(self, x, y,
                     lootTable=None, maxItems=8) -> str:
@@ -400,14 +603,14 @@ class Level:
             ]
 
         m = 'chest'
-        for item in range(random.randint(1, maxItems//2) * 2):
+        for item in range(random.randint(1, maxItems // 2) * 2):
             created = False
 
             while not created:
-                i = random.randint(0, len(lootTable)-1)
+                i = random.randint(0, len(lootTable) - 1)
                 item = lootTable[i]
 
-                if random.randint(0, 100000)/1000 <= item[2]:
+                if random.randint(0, 100000) / 1000 <= item[2]:
                     itemName = item[0]
                     itemCount = random.randint(1, item[1])
 
@@ -415,11 +618,11 @@ class Level:
 
                     created = True
 
-        print(m)
+        # print(m)
 
         self.level[x, y] = m
         if self.__generated:
-            changedBlocks.append([x, y, m])
+            self.game.changedBlocks.append([x, y, m])
 
         return m
 
@@ -445,16 +648,72 @@ class Config:
             return ''
 
 
+class Lobby:
+    def __init__(self):
+        self.players: [[socket.socket, tuple]]
+        self.players = []
+
+    def __handleMessage(self, sock: socket.socket, addr: tuple, message: str):
+        # There can be multiple commands in one message, they are split with ;
+        for msg in message:
+            try:
+                # If player wants to disconnect
+                if msg == 'disconnect':
+                    sock.close()
+                # If players wants to see all active games
+                elif msg == 'get_games':
+                    toSend = ''
+                    for game in main.games:
+                        toSend += 'g/' + game.name + '/' + str(game.getPlayersOnline()) + '/' + game.gameID + ';'
+                    sock.send(toSend.encode('utf-8'))
+                    # print("Sended all active games to player", addr[0])
+                # If player wants to join the game
+                elif 'join_game' in msg:
+                    print("Player joining the game...")
+                    msg = msg.replace('join_game/', '').split('/')
+                    # Structure of request: join_game/gameid;
+                    gameid = msg[0]
+                    # Finding battle with exact game id
+                    for game in main.games:
+                        if game.gameID == gameid:
+                            print("Player", addr[0], "joined the game", game.getGameIDString())
+                            game.addPlayer(sock, addr)
+                            self.players.remove([sock, addr])
+                # If player wants to create the game
+                elif 'create_game' in msg:
+                    print("\nCreating new game")
+                    g = Game('Game ' + str(len(main.games)))
+                    g.addPlayer(sock, addr)
+                    self.players.remove([sock, addr])
+                    main.games.append(g)
+                    print(main.games)
+
+            except Exception as e:
+                print("Exception while handling messages from client in the lobby:", e)
+                traceback.print_exc()
+
+    def update(self):
+        for sock, addr in self.players:
+            # Trying to receive data from the client
+            try:
+                # Receiving data and decoding it
+                d = sock.recv(1048576).decode('utf-8')
+
+                if d:
+                    # Handling commands
+                    self.__handleMessage(sock, addr, d.split(';'))
+            except:
+                pass
+
+
 class Main:
     def __init__(self):
         global main
         main = self
 
-        # Generating level
-        print("Initializing level")
-        self.level = Level()
-        print("Generating level")
-        self.level.generateLevel()
+        self.lobby = Lobby()
+        self.games: [Game]
+        self.games = []
 
         # Creating socket object
         print("Creating socket")
@@ -487,7 +746,7 @@ class Main:
         self.s.bind((self.ip, self.port))
 
         # Starting to listen to new clients
-        print("Starting to listen to clients")
+        print("Starting to listen to clients\n")
         self.s.listen(16384)
 
         # Setting socket mode to "non-blocking" which allows us to skip waiting for a new message
@@ -498,193 +757,30 @@ class Main:
         self.clients = []
         self.clients: [Client]
 
-        # Spawnpoint where joined players will appear
-        print("Creating spawnpoint ", end='')
-        self.spawn = Spawnpoint(random.randint(0, MAP_W-1), random.randint(0, MAP_H-1))
-        self.level.level[self.spawn.x, self.spawn.y] = 'grass'
-        print("at", self.spawn.x, self.spawn.y)
-
-        self.lastBulletUpdate = time.time()
-        self.lastBoostSpawn = time.time()
-
-    def getPlayersOnline(self) -> int:
-        playersOnline = 0
-        for client in self.clients:
-            if players[client.clientID].active: playersOnline += 1
-
-        return playersOnline
-
-    def broadcastMessage(self, msg: str):
-        client: Client
-        for client in self.clients:
-            client.sendMessage(msg)
-
-
-    def handleCommand(self, command: str) -> str:
-        try:
-            cmd = command.split(' ')
-            if cmd[0] == 'kick':
-                client: Client
-                for client in self.clients:
-                    if client.clientID == int(cmd[1]):
-                        client.disconnect(reason=''.join([s + ' ' for s in cmd[2::]]))
-                        return 'Successfully kicked player #' + str(cmd[1])
-                return 'No player found with id #' + str(cmd[1])
-            else:
-                return 'Unknown command.'
-        except Exception as e:
-            return 'Exception has occurred: ' + str(e)
-
     def __acceptNewClients(self):
         try:
             sock, addr = self.s.accept()
             sock.setblocking(False)
 
-            print("New player has joined, initializing player and client")
+            print("\nNew player has joined, moving him(her) to the lobby")
 
-            i = len(players)
-            players[i] = Player(0, 0, 'grass', 100, str(i))
-
-            client = Client(sock, addr, i)
-            client.setPosition(self.spawn.x, self.spawn.y)
-            self.clients.append(client)
+            self.lobby.players.append([sock, addr])
+            print("Currently there are", len(self.lobby.players), "players in the lobby.\n")
 
         except socket.error:
             pass
 
-    def __updateClients(self):
-        # Receiving new messages from clients
-        client: Client
-        for client in self.clients:
-            try:
-                client.update()
-            except Exception as e:
-                print("Exception was thrown while updating clients:\n", e)
-
-    def __updateChangedData(self):
-        for block in changedBlocks:
-            for client in self.clients:
-                client.changedBlocks.append(block)
-        changedBlocks.clear()
-
-        for obj in changedObjects:
-            for client in self.clients:
-                client.changedObjects.append(obj)
-        changedObjects.clear()
-
-        for msg in newMessages:
-            for client in self.clients:
-                client.newMessages.append(msg)
-        newMessages.clear()
-
-        player: Damage
-        for player in playersDamaged:
-            print(player.damageAmount, player.damager, player.receiver)
-            self.clients[player.receiver].dataToSend.append('bullet_hit/' + str(player.damageAmount))
-            if players[player.receiver].health-player.damageAmount <= 0:
-                self.broadcastMessage(
-                    players[player.receiver].nickname + ' was killed by ' + players[player.damager].nickname)
-        playersDamaged.clear()
-
-        for player in playersLeft:
-            for client in self.clients:
-                client.playersLeft.append(player)
-        playersLeft.clear()
-
-    def __processCommands(self):
-        for command in commandsFromClients:
-            print(command)
-            response = self.handleCommand(command[1])
-            print(response)
-            for client in self.clients:
-                if client.clientID == command[0]:
-                    print(client.clientID)
-                    client.serviceMessages.append(response)
-        commandsFromClients.clear()
-
-    def __updateBullets(self):
-        if time.time() - self.lastBulletUpdate >= 1 / 5:
-            for i in range(len(bullets)):
-                bullet = bullets[i]
-                if bullet.active:
-                    # Checking if bullet is within borders of map
-                    if 0 <= bullet.x < MAP_W and 0 <= bullet.y < MAP_H and \
-                            main.level.level[bullet.x, bullet.y] in ['grass', 'wood']:
-                        # Checking if bullet hits someone
-                        hit = False
-
-                        j: Client
-                        for j in self.clients:
-                            player = players[j.clientID]
-                            if player.x == bullet.x and player.y == bullet.y \
-                                    and not (j.clientID == bullet.owner) and player.active:
-                                # Processing hit
-                                j.dataToSend.append('bullet_hit/10')
-                                bullets[i].active = False
-                                hit = True
-
-                        if not hit and main.level.level[bullet.x, bullet.y] == 'wood' and random.randint(0, 9) == 0:
-                            main.level.level[bullet.x, bullet.y] = 'grass'
-                            changedBlocks.append([bullet.x, bullet.y, 'grass'])
-                            bullets[i].active = False
-                        elif not main.level.level[bullet.x, bullet.y] == 'grass':
-                            bullets[i].active = False
-
-                        bullet.x += bullet.movX
-                        bullet.y += bullet.movY
-                    else:
-                        bullets[i].active = False
-
-            for bullet in bullets:
-                if not bullet.active:
-                    bullets.remove(bullet)
-
-            self.lastBulletUpdate = time.time()
-
     def update(self) -> None:
-        global players
-        global bullets
-
         try:
-            # Regenerating spawn point if there's a block at spawnpoint coordinates.
-            if self.level.level[self.spawn.x, self.spawn.y] != 'grass':
-                print("Spawnpoint was blocked, regenerating it")
-                created = False
-                while not created:
-                    x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
-                    if self.level.level[x, y] in ['grass', 'wooden_door_opened']:
-                        self.spawn = Spawnpoint(x, y)
-                        created = True
-
             # Accepting clients
             self.__acceptNewClients()
-            self.__updateClients()
-            self.__updateChangedData()
-            self.__processCommands()
 
-            # Spawning chests ( only if there is at least one player online )
-            if time.time() - self.lastBoostSpawn >= 60 and self.getPlayersOnline() > 0:
-                print("Spawning new ", end='')
-                spawned = False
-                while not spawned:
-                    x, y = random.randint(0, MAP_W-1), random.randint(0, MAP_H-1)
-                    if self.level.level[x, y] == 'grass':
-                        if random.randint(0, 4) == 0:
-                            print("health boost")
-                            self.level.setBlock(x, y, 'heart')
-                        else:
-                            print("chest")
-                            self.level.createChest(x, y)
-                        spawned = True
+            # Updating lobby
+            self.lobby.update()
 
-                self.lastBoostSpawn = time.time()
-
-            self.__updateBullets()
-
-            if len(self.clients) > 0:
-                time.sleep(1 / (30 * len(self.clients)))
-            else:
-                time.sleep(1 / 60)
+            # Updating all active games
+            for game in self.games:
+                game.update()
 
         except Exception as e:
             print("CRITICAL SERVER ERROR: ", e)
@@ -692,8 +788,10 @@ class Main:
 
     def shutDown(self):
         print("\nShutting down server.")
-        for client in self.clients:
-            client.disconnect()
+        for game in self.games:
+            client: Client
+            for client in game.players:
+                client.disconnect()
         self.s.close()
         self.s.detach()
 
@@ -704,7 +802,7 @@ class GUI:
 
     def sendClientMessage(self):
         if len(self.main.clients) >= int(self.entry1.get()):
-            self.main.clients[int(self.entry1.get())].dataToSend.append('service/'+self.entry2.get())
+            self.main.clients[int(self.entry1.get())].dataToSend.append('service/' + self.entry2.get())
 
     def evalMessage(self):
         self.result['text'] = 'Result: ' + str(exec(self.entry3.get('0.0', END)))
@@ -736,7 +834,6 @@ class GUI:
         self.button1.grid(row=2, column=0, columnspan=2)
 
         self.clientMessageFrame.grid(row=1, column=0, padx=10, pady=30)
-
 
         self.evalFrame = Frame(self.root)
 

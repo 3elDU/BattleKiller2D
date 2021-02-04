@@ -456,6 +456,9 @@ class Client:
             self.s.setblocking(False)
 
             self.clientId = -1
+            self.playerInLobby = True
+
+            self.lobbyMenu()
 
             self.loadLevel()
         except Exception as e:
@@ -476,6 +479,78 @@ class Client:
         self.newMessages = []
 
         self.sent = False
+
+    def lobbyMenu(self):
+        # Structure is [[gameTitle, playersInGame]]
+        games: [str, int, str]
+        games = []
+
+        selectedGame = 0
+        joinedGame = False
+
+        lastGamesRequest = time.time()
+        while not joinedGame:
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    self.sendMessage('disconnect')
+                    exit()
+                elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_UP:
+                        if selectedGame > 0: selectedGame -= 1
+                        else: selectedGame = len(games)-1
+
+                    elif e.key == pygame.K_DOWN:
+                        if selectedGame < len(games)-1: selectedGame += 1
+                        else: selectedGame = 0
+
+                    if e.key == pygame.K_c:
+                        self.sendMessage('create_game')
+                        return
+
+                    elif e.key == pygame.K_RETURN:
+                        if len(games) == 0:
+                            self.sendMessage('create_game')
+                            return
+
+                        self.sendMessage('join_game/' + games[selectedGame][2])
+                        return
+
+            if selectedGame > len(games) and selectedGame != 0:
+                selectedGame = len(games)-1
+
+            if time.time() - lastGamesRequest >= 0.5:
+                self.sendMessage('get_games')
+                lastGamesRequest = time.time()
+
+            msg = self.getMessages()
+            if msg:
+                games.clear()
+                for obj in msg:
+                    if obj:
+                        o = obj.split('/')
+                        if o[0] == 'g':
+                            games.append([o[1], int(o[2]), o[3]])
+
+            main.sc.fill((128, 128, 128))
+
+            if len(games) > 0:
+                for i in range(len(games)):
+                    t = main.font.render(str(games[i][0]) + '; ' + str(games[i][1]) + ' Players.', True, (0, 0, 0))
+
+                    if i == selectedGame:
+                        pygame.draw.rect(main.sc, (170, 170, 170), (10, 10+i*56, t.get_width()+40, t.get_height()))
+                    else:
+                        pygame.draw.rect(main.sc, (70, 70, 70), (10, 10+i*56, t.get_width()+40, t.get_height()))
+
+                    r = t.get_rect(topleft=(20, 10+i*56))
+                    main.sc.blit(t, r)
+            else:
+                t = main.font.render("Currently there are no active battles. Why not create one?", True, (0, 0, 0))
+                r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2))
+                main.sc.blit(t, r)
+
+            pygame.display.update()
+
 
     def loadLevel(self):
         print("Loading level")
@@ -879,6 +954,88 @@ class ChatMenu:
             pygame.display.update()
 
 
+class UIButton:
+    def __init__(self, centerx, centery, text: str, padding=20):
+        self.text = main.font.render(text, True, (0, 0, 0))
+
+        self.surface = pygame.Surface((self.text.get_width()+padding*2, self.text.get_height()+padding*2))
+        self.surface.fill((128, 128, 128))
+        self.surface.blit(self.text, self.text.get_rect(center=(self.surface.get_width()//2,
+                                                                self.surface.get_height()//2)))
+
+        self.topleftx = centerx - self.surface.get_width() // 2
+        self.toplefty = centery - self.surface.get_height() // 2
+
+    def getSurface(self): return self.surface
+
+    def checkClick(self, x, y) -> bool:
+        # Registering click
+        if self.topleftx <= x <= self.topleftx+self.surface.get_width() and \
+           self.toplefty <= y <= self.toplefty+self.surface.get_height():
+            return True
+        return False
+
+
+
+class PauseMenu:
+    def __init__(self, sc):
+        self.sc = sc
+
+        self.blackscreen = pygame.Surface((SCREEN_W, SCREEN_H))
+        self.blackscreen.fill((0, 0, 0))
+        self.blackscreen.set_alpha(128)
+
+        self.continuebutton = UIButton(SCREEN_W//2, SCREEN_H//2-100, 'Continue')
+        self.lobbybutton = UIButton(SCREEN_W//2, SCREEN_H//2, 'Back to lobby')
+        self.exitbutton = UIButton(SCREEN_W//2, SCREEN_H//2+100, 'Exit')
+
+        self.loop()
+
+    def loop(self):
+        while True:
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    main.c.disconnect()
+                    time.sleep(0.1)
+                    exit()
+                elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_ESCAPE: return
+
+            self.sc.fill((255, 255, 255))
+
+            main.renderer.renderGame()
+            self.sc.blit(self.blackscreen, self.blackscreen.get_rect(topleft=(0, 0)))
+
+            # Rendering buttons
+            self.sc.blit(self.continuebutton.getSurface(), self.continuebutton.getSurface().get_rect(topleft=(
+                self.continuebutton.topleftx, self.continuebutton.toplefty
+            )))
+            self.sc.blit(self.lobbybutton.getSurface(), self.lobbybutton.getSurface().get_rect(topleft=(
+                self.lobbybutton.topleftx, self.lobbybutton.toplefty
+            )))
+            self.sc.blit(self.exitbutton.getSurface(), self.exitbutton.getSurface().get_rect(topleft=(
+                self.exitbutton.topleftx, self.exitbutton.toplefty
+            )))
+
+            x, y = pygame.mouse.get_pos()
+            clicked = pygame.mouse.get_pressed(3)
+            # If left mouse button is clicked, then checking if we clicked any of buttons on the screen
+            if clicked[0]:
+                if self.continuebutton.checkClick(x, y):
+                    return
+                elif self.lobbybutton.checkClick(x, y):
+                    main.c.disconnect()
+                    main.c = Client(main.serverIp, main.serverPort)
+                    main.c.setNickname(main.nickname)
+                    return
+                elif self.exitbutton.checkClick(x, y):
+                    main.c.disconnect()
+                    time.sleep(0.1)
+                    exit()
+
+            pygame.display.update()
+
+
 class EventHandler:
     def __init__(self):
         self.lastMovement = 0
@@ -888,9 +1045,14 @@ class EventHandler:
 
             if e.type == pygame.QUIT:
                 main.c.disconnect()
+                time.sleep(0.1)
+                exit()
                 return
 
             elif e.type == pygame.KEYDOWN and not main.c.disconnected:
+
+                if e.key == pygame.K_ESCAPE:
+                    PauseMenu(main.sc)
 
                 if e.key == pygame.K_SPACE and e.mod == pygame.KMOD_LSHIFT:
                     main.c.sendMessage('shoot' + str(main.x) + '/' + str(main.y + 1) + '/0/1/(0,0,0)')
