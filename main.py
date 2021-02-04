@@ -27,8 +27,7 @@ class Block:
         elif blockID == 'wooden_door_closed':
             return Door(x, y)
         elif blockID == 'wooden_door_opened':
-            d = Door(x, y)
-            d.interact()
+            d = Door(x, y, True)
             return d
         elif blockID == 'heart':
             return Heart(x, y)
@@ -65,21 +64,28 @@ class StoneWall(Block):
 
 
 class Door(Block):
-    def __init__(self, x, y):
+    def __init__(self, x, y, opened=False):
         Block.__init__(self, x, y, texture='wooden_door_closed', name='Wooden door')
+        if opened:
+            self.texture = 'wooden_door_opened'
+            self.collidable = False
 
         # Door state. False is closed, True is opened
-        self.state = False
+        self.state = opened
 
     def interact(self):
         # Opening door if it is closed
         if not self.state:
             self.state = True
             self.texture = 'wooden_door_opened'
+            self.collidable = False
+            main.map.updateBlock(self.x, self.y, self)
         # And closing, if it was opened
         else:
             self.state = False
             self.texture = 'wooden_door_closed'
+            self.collidable = True
+            main.map.updateBlock(self.x, self.y, self)
 
 
 class Chest(Block):
@@ -413,6 +419,10 @@ class MapManager:
         self.level = {}
         self.objects = {}
 
+    def updateBlock(self, x, y, block: Block):
+        self.level[x, y] = block
+        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + str(block.texture))
+
     def setBlock(self, x, y, block):
         x = int(x)
         y = int(y)
@@ -421,7 +431,12 @@ class MapManager:
             bl = block
             bl.x, bl.y = x, y
         elif type(block) == str:
-            bl = Block.getBlockFromID(x, y, block)
+            if block == 'wooden_door_closed':
+                bl = Door(x, y)
+            elif block == 'wooden_door_opened':
+                bl = Door(x, y, True)
+            else:
+                bl = Block.getBlockFromID(x, y, block)
         else:
             return
 
