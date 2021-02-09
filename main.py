@@ -15,6 +15,15 @@ SCREEN_W = MAP_W * BLOCK_W
 SCREEN_H = (MAP_H + 1) * BLOCK_H
 
 
+def clamp(val, minimum, maximum):
+    if val < minimum:
+        return minimum
+    elif val > maximum:
+        return maximum
+    else:
+        return val
+
+
 class SoundStub:
     def play(self, duration=0): pass
 
@@ -89,14 +98,23 @@ class Door(Block):
 
 
 class Chest(Block):
-    def __init__(self, x, y, items: str):
+    def __init__(self, x, y, items):
         Block.__init__(self, x, y, texture='chest', name='Chest')
 
         self.items = []
-        for item in items.split(','):
-            i = item.split('=')
-            if len(i) == 2:
-                self.items.append([i[0], int(i[1])])
+
+        if type(items) == str:
+            print("Converting chest items from string")
+            for item in items.replace('chest', '').split(','):
+                i = item.split('=')
+                if len(i) == 2:
+                    self.items.append([i[0], int(i[1])])
+        elif type(items) == list:
+            print("Converting chest items from list")
+            self.items = items
+
+        for item in self.items:
+            self.texture += ',' + item[0] + '=' + str(item[1])
 
     def interact(self):
         ChestMenu(main.sc, self.items, self.x, self.y)
@@ -161,10 +179,10 @@ class Item:
         """
 
     def use(self, bx, by, ox, oy):
-        self.interactWithBlock(ox, oy)
+        self.interactWithBlock(bx, by)
 
     def attack(self, bx, by, ox, oy):
-        self.interactWithBlock(ox, oy)
+        self.interactWithBlock(bx, by)
 
 
 class Pickaxe(Item):
@@ -421,33 +439,35 @@ class MapManager:
 
     def updateBlock(self, x, y, block: Block):
         self.level[x, y] = block
-        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + str(block.texture))
+        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(block.texture))
 
     def setBlock(self, x, y, block):
-        x = int(x)
-        y = int(y)
+        try:
+            x = int(x)
+            y = int(y)
 
-        if type(block) == Block:
-            bl = block
-            bl.x, bl.y = x, y
-        elif type(block) == str:
-            if block == 'wooden_door_closed':
-                bl = Door(x, y)
-            elif block == 'wooden_door_opened':
-                bl = Door(x, y, True)
+            if type(block) == str:
+                if block == 'wooden_door_closed':
+                    bl = Door(x, y)
+                elif block == 'wooden_door_opened':
+                    bl = Door(x, y, True)
+                else:
+                    bl = Block.getBlockFromID(x, y, block)
             else:
-                bl = Block.getBlockFromID(x, y, block)
-        else:
-            return
+                bl = block
+                bl.x, bl.y = x, y
 
-        # Playing sound if we break block
-        if bl.texture == 'grass':
-            main.sounds['block_break'].play()
-        else:
-            main.sounds['block_place'].play()
+            # Playing sound if we break block
+            if bl.texture == 'grass':
+                main.sounds['block_break'].play()
+            else:
+                main.sounds['block_place'].play()
 
-        self.level[x, y] = bl
-        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(bl.texture))
+            self.level[x, y] = bl
+            main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(bl.texture))
+        except:
+            print("MapManager.setBlock() exception:")
+            traceback.print_exc()
 
     def createObject(self, x, y, texture):
         self.objects[x, y] = Object(x, y, texture)
@@ -508,6 +528,7 @@ class Client:
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     self.sendMessage('disconnect')
+                    time.sleep(0.1)
                     exit()
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_UP:
@@ -519,12 +540,16 @@ class Client:
                         else: selectedGame = 0
 
                     if e.key == pygame.K_c:
-                        self.sendMessage('create_game')
+                        gamename = InputPrompt('Choose a name for the battle:', default=main.nickname+"'s game")
+                        gamename.show()
+                        self.sendMessage('create_game/' + gamename.getInput())
                         return
 
                     elif e.key == pygame.K_RETURN:
                         if len(games) == 0:
-                            self.sendMessage('create_game')
+                            gamename = InputPrompt('Choose a name for the battle:', default=main.nickname+"'s game")
+                            gamename.show()
+                            self.sendMessage('create_game/' + gamename.getInput())
                             return
 
                         self.sendMessage('join_game/' + games[selectedGame][2])
@@ -702,8 +727,11 @@ class ChestMenu:
         while True:
             main.c.update()
 
-            if main.map.level[self.x, self.y].texture != 'chest':
+            if type(main.map.level[self.x, self.y]) != Chest:
                 return
+            elif main.map.level[self.x, self.y].items != self.items:
+                print(self.items, main.map.level[self.x, self.y].items)
+                self.items = main.map.level[self.x, self.y].items
 
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
@@ -734,6 +762,7 @@ class ChestMenu:
                         else:
                             main.selectedSlot = 0
 
+
                     # Taking all items out of the chest
                     elif e.key == pygame.K_g:
                         for item in self.items:
@@ -742,8 +771,9 @@ class ChestMenu:
                                 main.inventory.addInventoryItem(specialItemList[item[0]]())
                             else:
                                 main.inventory.addInventoryItem(Item(item[0], item[0], int(item[1])))
-                        main.map.setBlock(self.x, self.y, 'chest')
+                        main.map.setBlock(self.x, self.y, Chest(self.x, self.y, []))
                         return
+
                     # Taking selected item(s) from the chest
                     elif e.key == pygame.K_b:
                         if len(self.items) > 0:
@@ -759,11 +789,12 @@ class ChestMenu:
                             for item in self.items:
                                 s += item[0] + '=' + str(item[1]) + ','
 
-                            main.map.setBlock(self.x, self.y, s)
+                            main.map.setBlock(self.x, self.y, Chest(self.x, self.y, self.items))
 
                             if self.selected > len(self.items) - 1:
                                 print("large")
                                 self.selected = len(self.items) - 1
+
 
                     # Adding selected item(s) to the chest
                     if len(main.inventory.inventoryItems) > 0:
@@ -786,10 +817,11 @@ class ChestMenu:
                             for item in self.items:
                                 s += ',' + item[0] + '=' + str(item[1])
 
-                            main.map.setBlock(self.x, self.y, s)
+                            main.map.setBlock(self.x, self.y, Chest(self.x, self.y, self.items))
 
                             if main.selectedSlot > len(main.inventory.inventoryItems):
                                 main.selectedSlot = len(main.inventory.inventoryItems) - 1
+
                         # Adding one selected item to the chest
                         elif e.key == pygame.K_n:
                             name = main.inventory.inventoryItems[main.selectedSlot].name
@@ -809,7 +841,7 @@ class ChestMenu:
                             for item in self.items:
                                 s += ',' + item[0] + '=' + str(item[1])
 
-                            main.map.setBlock(self.x, self.y, s)
+                            main.map.setBlock(self.x, self.y, Chest(self.x, self.y, self.items))
 
                             if main.selectedSlot > len(main.inventory.inventoryItems):
                                 main.selectedSlot = len(main.inventory.inventoryItems) - 1
@@ -817,14 +849,14 @@ class ChestMenu:
             main.renderer.renderGame()
             self.sc.blit(self.gray, self.gray.get_rect(topleft=(0, 0)))
 
-            pygame.draw.rect(self.sc, (255, 255, 255), (SCREEN_W // 2 - len(self.items) // 2 * BLOCK_W,
+            pygame.draw.rect(self.sc, (255, 255, 255), (int(SCREEN_W / 2 - len(self.items) / 2 * BLOCK_W),
                                                         SCREEN_H // 2 - BLOCK_H // 2,
                                                         len(self.items) * BLOCK_W,
                                                         BLOCK_H))
 
             if len(self.items) > 0:
                 for item in range(len(self.items)):
-                    p = SCREEN_W // 2 - len(self.items) // 2 * BLOCK_W + item * BLOCK_W
+                    p = int(SCREEN_W / 2 - len(self.items) / 2 * BLOCK_W + item * BLOCK_W)
                     if self.selected != item:
                         t = pygame.transform.scale(
                             main.textures[self.items[item][0].split(',')[0]], (BLOCK_W // 2, BLOCK_H // 2))
@@ -848,14 +880,16 @@ class ChestMenu:
 
 
 class InputPrompt:
-    def __init__(self, message=''):
+    def __init__(self, message='', default=''):
         self.sc = main.sc
 
+        self.__default = default
         self.__prompt = message
         self.__input = ''
 
     def getInput(self):
-        return self.__input
+        if len(self.__input) == 0: return self.__default
+        else: return self.__input
 
     def show(self):
         while True:
@@ -1046,7 +1080,8 @@ class PauseMenu:
                 elif self.exitbutton.checkClick(x, y):
                     main.c.disconnect()
                     time.sleep(0.1)
-                    exit()
+                    main.running = False
+                    return
 
             pygame.display.update()
 
@@ -1066,12 +1101,20 @@ class EventHandler:
 
             elif e.type == pygame.KEYDOWN and not main.c.disconnected:
 
+                # Displaying pause menu when user presses Escape
                 if e.key == pygame.K_ESCAPE:
                     PauseMenu(main.sc)
 
+                # Displaying various debug info like fps and player position
+                if e.key == pygame.K_F3:
+                    main.displayingDebugInfo = not main.displayingDebugInfo
+
+                # When users presses Lshift+Space, bullet will fly down from the player
+                # This is very old function, now we have sniper class, so I may remove this functionality later
                 if e.key == pygame.K_SPACE and e.mod == pygame.KMOD_LSHIFT:
                     main.c.sendMessage('shoot' + str(main.x) + '/' + str(main.y + 1) + '/0/1/(0,0,0)')
 
+                # Inventory slots. Q - move selection left, E - move selection right
                 if e.key == pygame.K_q or e.key == pygame.K_LEFT:
                     if main.selectedSlot > 0:
                         main.selectedSlot -= 1
@@ -1083,11 +1126,16 @@ class EventHandler:
                     else:
                         main.selectedSlot = 0
 
+                # When pressed "c", opening fullscreen chat menu, but if presses m,
+                # opening "portable" chat menu, which takes a lot less space on the screen,
+                # so you can see the game itself
                 if e.key == pygame.K_c:
                     ChatMenu(main.c, main.sc)
                 elif e.key == pygame.K_m:
                     ChatMenu(main.c, main.sc, quickMenu=True)
 
+                # Very buggy fullscreen mode, please don't uncomment this.
+                """
                 if e.key == pygame.K_f:
                     main.fullscreen = not main.fullscreen
                     if main.fullscreen:
@@ -1096,42 +1144,54 @@ class EventHandler:
                     else:
                         pygame.display.quit()
                         main.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+                """
 
+                # Reconnecting if you user is disconnected from the server ( kicked for example ) and presses R key
                 if e.key == pygame.K_r and main.c.disconnected:
                     global RECONNECTING
                     RECONNECTING = True
                     main.running = False
 
+            # Handling mouse button presses
             elif e.type == pygame.MOUSEBUTTONDOWN and not main.c.disconnected:
                 mouse = pygame.mouse.get_pos()
                 x, y = mouse[0], mouse[1]
 
                 if x < MAP_W * BLOCK_W and y < MAP_H * BLOCK_H:
+                    # Drawing little red "cursor" at mouse position
                     pygame.draw.rect(main.sc, (255, 0, 0),
                                      (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
 
                     pressed = pygame.mouse.get_pressed(3)
                     if pressed[0] or pressed[2]:
+                        # Transfering screen mouse corrdinates to world coordinates
+
                         movX = 0
                         movY = 0
 
-                        if x // BLOCK_W < main.x:
+                        if x < SCREEN_W//2-BLOCK_W//2:
                             movX = -1
-                        elif x // BLOCK_W == main.x:
+                        elif SCREEN_W//2-BLOCK_W//2 <= x <= SCREEN_W//2+BLOCK_W//2:
                             movX = 0
-                        elif x // BLOCK_W > main.x:
+                        elif x > SCREEN_W//2+BLOCK_W//2:
                             movX = 1
 
-                        if y // BLOCK_H < main.y:
+                        if y < SCREEN_H//2-BLOCK_H//2:
                             movY = -1
-                        elif y // BLOCK_H == main.y:
+                        elif SCREEN_H//2-BLOCK_H//2 <= y <= SCREEN_H//2+BLOCK_H//2:
                             movY = 0
-                        elif y // BLOCK_H > main.y:
+                        elif y > SCREEN_H//2+BLOCK_H//2:
                             movY = 1
 
                         # For block placing
-                        resX = main.x + movX
-                        resY = main.y + movY
+                        resX = clamp(main.x + movX, 0, MAP_W-1)
+                        resY = clamp(main.y + movY, 0, MAP_H-1)
+
+                        ox = clamp((x - (SCREEN_W//2-main.pixelx)) // BLOCK_W, 0, MAP_W-1)
+                        oy = clamp((y - (SCREEN_H//2-main.pixely)) // BLOCK_H, 0, MAP_H-1)
+
+                        print("resX:", resX, "; resY:", resY)
+                        print("ox:", ox, "; oy:", oy)
 
                         # Handling left and right mouse buttons presses
                         if not (movX == 0 and movY == 0) and 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
@@ -1139,14 +1199,14 @@ class EventHandler:
                             if len(main.inventory.inventoryItems) == 0:
                                 i = Item('pickaxe', 'pickaxe', 1)
                                 if pressed[0]:
-                                    i.attack(resX, resY, resX, resY)
+                                    i.attack(resX, resY, ox, oy)
                                 elif pressed[2]:
-                                    i.use(resX, resY, resX, resY)
+                                    i.use(resX, resY, ox, oy)
                             else:
                                 # If left button was pressed
                                 if pressed[0]:
                                     main.inventory.inventoryItems[main.selectedSlot].attack(
-                                        resX, resY, x // BLOCK_W, y // BLOCK_H
+                                        resX, resY, ox, oy
                                     )
 
                                 # If right button was pressed
@@ -1156,7 +1216,7 @@ class EventHandler:
                                     # If it is an item, using it.
                                     if main.inventory.inventoryItems[main.selectedSlot].specialItem:
                                         main.inventory.inventoryItems[main.selectedSlot].use(
-                                            resX, resY, x // BLOCK_W, y // BLOCK_H)
+                                            resX, resY, ox, oy)
                                     else:
 
                                         # We will place the block only on grass, we won't replace other blocks
@@ -1206,58 +1266,73 @@ class EventHandler:
 
 class Renderer:
     def __init__(self):
+        self.sc: pygame.Surface
         self.sc = main.sc
 
+        self.mapsc: pygame.Surface
+        self.mapsc = main.mapsc
+
     def renderGame(self):
+        # Drawing water background
+        for x in range(-1, MAP_W+2):
+            for y in range(-1, MAP_H+2):
+                self.sc.blit(main.textures['water'], main.textures['water'].get_rect(topleft=(
+                    x*BLOCK_W-main.pixelx % BLOCK_W,
+                    y*BLOCK_H-main.pixely % BLOCK_H-BLOCK_H//2
+                )))
+
         # Rendering map
         for x in range(MAP_W):
             for y in range(MAP_H):
                 t = main.textures[main.map.level[x, y].texture.split(',')[0]]
-                self.sc.blit(t, t.get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
+                self.mapsc.blit(t, t.get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
 
         # Rendering bullets
         for bullet in bullets:
             if bullet.active:
-                pygame.draw.rect(self.sc, bullet.color, (bullet.x * BLOCK_W + (BLOCK_W // 4),
-                                                         bullet.y * BLOCK_H + (BLOCK_H // 4),
-                                                         40, 40))
+                pygame.draw.rect(self.mapsc, bullet.color, (bullet.x * BLOCK_W + (BLOCK_W // 4),
+                                                            bullet.y * BLOCK_H + (BLOCK_H // 4),
+                                                            40, 40))
+
+        # Rendering objects
+        for obj in main.map.objects:
+            if main.map.objects[obj].active:
+                self.mapsc.blit(main.textures[main.map.objects[obj].texture],
+                                main.textures[main.map.objects[obj].texture].get_rect(
+                                    topleft=(main.map.objects[obj].x, main.map.objects[obj].y)))
 
         # Rendering enemies ( other players )
         for p in players:
             player = players[p]
             if player.active:
-                self.sc.blit(main.textures[player.texture],
-                             main.textures[player.texture].get_rect(center=(player.x, player.y)))
-                pygame.draw.rect(self.sc, (0, 0, 0),
+                self.mapsc.blit(main.textures[player.texture],
+                                main.textures[player.texture].get_rect(center=(player.x, player.y)))
+                pygame.draw.rect(self.mapsc, (0, 0, 0),
                                  (player.x - 3 - BLOCK_W // 2, player.y - 3 - BLOCK_H // 2, BLOCK_W + 6,
                                   BLOCK_H // 8 + 6))
-                pygame.draw.rect(self.sc, (255, 0, 0), (
+                pygame.draw.rect(self.mapsc, (255, 0, 0), (
                     player.x - BLOCK_W // 2, player.y - BLOCK_H // 2, int(player.health * 0.8), BLOCK_H // 8))
+
+        self.sc.blit(self.mapsc, self.mapsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
+                                                              SCREEN_H // 2 - main.pixely)))
 
         # Rendering "Shadow" under the player to see him easily.
         self.sc.blit(main.textures['arrow'],
-                     main.textures['arrow'].get_rect(center=(main.pixelx,
-                                                             main.pixely)))
+                     main.textures['arrow'].get_rect(center=(SCREEN_W//2, SCREEN_H//2)))
 
         # Rendering our player
         self.sc.blit(main.textures[main.playerClass.texture],
                      main.textures[main.playerClass.texture].get_rect(
-                         center=(main.pixelx, main.pixely)
+                         center=(SCREEN_W//2, SCREEN_H//2)
+                         # center=(main.pixelx, main.pixely)
                      ))
 
         # Rendering our player HP indicator ( on his head )
         pygame.draw.rect(self.sc, (0, 0, 0),
-                         (main.pixelx - 3 - BLOCK_W // 2, main.pixely - 3 - BLOCK_H // 2, BLOCK_W + 6,
+                         (SCREEN_W//2 - 3 - BLOCK_W // 2, SCREEN_H//2 - 3 - BLOCK_H // 2, BLOCK_W + 6,
                           BLOCK_H // 8 + 6))
         pygame.draw.rect(self.sc, (0, 255, 0), (
-            main.pixelx - BLOCK_W // 2, main.pixely - BLOCK_H // 2, int(health * 0.8), BLOCK_H // 8))
-
-        # Rendering objects
-        for obj in main.map.objects:
-            if main.map.objects[obj].active:
-                self.sc.blit(main.textures[main.map.objects[obj].texture],
-                             main.textures[main.map.objects[obj].texture].get_rect(
-                                 topleft=(main.map.objects[obj].x, main.map.objects[obj].y)))
+            SCREEN_W//2 - BLOCK_W // 2, SCREEN_H//2 - BLOCK_H // 2, int(health * 0.8), BLOCK_H // 8))
 
         # Rendering inventory background
         pygame.draw.line(self.sc, (0, 0, 0), [0, MAP_H * BLOCK_H], [MAP_W * BLOCK_W, MAP_H * BLOCK_H])
@@ -1280,18 +1355,35 @@ class Renderer:
                 r = t.get_rect(center=(slot * BLOCK_W + BLOCK_W // 2, MAP_H * BLOCK_H + 18))
                 self.sc.blit(t, r)
 
-        # Rendering various texts
+        # Displaying player stats
         t = main.font.render(main.localization['health'] + str(health), True, (0, 0, 0))
         r = t.get_rect(topleft=(0, 0))
-        self.sc.blit(t, r)
-
-        t = main.font.render("FPS: " + str(main.fps), True, (0, 0, 0))
-        r = t.get_rect(topleft=(0, BLOCK_H // 2))
         self.sc.blit(t, r)
 
         t = main.font.render("Defence level: " + str(main.defenceLevel), True, (0, 0, 0))
         r = t.get_rect(topleft=(4 * BLOCK_W, 0))
         self.sc.blit(t, r)
+
+        if main.displayingDebugInfo:
+            t = main.font.render("FPS: " + str(main.fps), True, (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, 0))
+            self.sc.blit(t, r)
+
+            t = main.font.render("pixelx: " + str(round(main.pixelx, 1)), True, (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H*0.5))
+            self.sc.blit(t, r)
+
+            t = main.font.render("pixely: " + str(round(main.pixely, 1)), True, (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H))
+            self.sc.blit(t, r)
+
+            t = main.font.render("x: " + str(main.x), True, (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H*1.5))
+            self.sc.blit(t, r)
+
+            t = main.font.render("y: " + str(main.y), True, (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H*2))
+            self.sc.blit(t, r)
 
         # Rendering messages
         message: ChatMessage
@@ -1392,9 +1484,6 @@ class CollisionDetection:
     def update(self):
         # print(self.xvel, self.yvel, end=' ')
 
-        self.x = self.clamp(self.x, -1, MAP_W * BLOCK_W)
-        self.y = self.clamp(self.y, -1, MAP_H * BLOCK_H)
-
         self.xvel = self.clamp(self.xvel, -2, 2)
         self.yvel = self.clamp(self.yvel, -2, 2)
 
@@ -1402,12 +1491,11 @@ class CollisionDetection:
 
         if self.canStepOn(self.x + self.xvel, self.y):
             self.x += self.xvel
-        else:
-            self.xvel = 0
         if self.canStepOn(self.x, self.y + self.yvel):
             self.y += self.yvel
-        else:
-            self.yvel = 0
+        if self.canStepOn(self.x + self.xvel, self.y + self.yvel):
+            self.x += self.xvel
+            self.y += self.yvel
 
         self.xvel *= 0.9
         self.yvel *= 0.9
@@ -1415,11 +1503,14 @@ class CollisionDetection:
         if -0.01 <= self.xvel <= 0.01: self.xvel = 0
         if -0.01 <= self.yvel <= 0.01: self.yvel = 0
 
+        self.x = self.clamp(self.x, 0, (MAP_W - 0.5) * BLOCK_W)
+        self.y = self.clamp(self.y, 0, (MAP_H - 0.5) * BLOCK_H)
+
     def getPos(self) -> (int, int):
         return self.x, self.y
 
     @staticmethod
-    def playerIsCollidingWith(x, y, playerX=None, playerY=None):
+    def playerIsCollidingWith(x, y, playerX, playerY):
         points = [
             (playerX - BLOCK_W // 3, playerY - BLOCK_H // 3),  # Upleft
             (playerX + BLOCK_W // 3, playerY - BLOCK_H // 3),  # Upright
@@ -1451,15 +1542,15 @@ class CollisionDetection:
         #     p.append([])
 
         points = [
-            (x - BLOCK_W // 3, y - BLOCK_H // 3),  # Upleft
-            (x + BLOCK_W // 3, y - BLOCK_H // 3),  # Upright
-            (x - BLOCK_W // 3, y + BLOCK_H // 3),  # Downleft
-            (x + BLOCK_W // 3, y + BLOCK_H // 3)  # Downright
+            (x - BLOCK_W / 2.5, y - BLOCK_H / 2.5),  # Upleft
+            (x + BLOCK_W / 2.5, y - BLOCK_H / 2.5),  # Upright
+            (x - BLOCK_W / 2.5, y + BLOCK_H / 2.5),  # Downleft
+            (x + BLOCK_W / 2.5, y + BLOCK_H / 2.5)  # Downright
         ]
 
         for point in points:
             if 0 <= point[0] <= MAP_W * BLOCK_W and 0 <= point[1] <= MAP_H * BLOCK_H:
-                if main.map.level[int(point[0] // BLOCK_W), int(point[1] // BLOCK_H)].collidable:
+                if main.map.level[int(point[0] / BLOCK_W), int(point[1] / BLOCK_H)].collidable:
                     return False
             else:
                 return False
@@ -1506,7 +1597,8 @@ class Main:
         self.fullscreen = False
 
         self.sc = surface
-        pygame.display.set_caption("BattleKiller 2D")
+        self.mapsc = pygame.Surface((MAP_W*BLOCK_W, MAP_H*BLOCK_H))
+        pygame.display.set_caption("BattleKiller 2D " + GAME_VERSION)
 
         self.setup()
 
@@ -1558,6 +1650,8 @@ class Main:
         self.fps = 0
         self.__frames = 0
 
+        self.displayingDebugInfo = False
+
         self.defenceLevel = 0
 
     def mainLoop(self):
@@ -1600,9 +1694,11 @@ class Main:
                     self.renderer.renderGame()
                 else:
                     self.c.disconnect()
-                    t = self.font.render(self.localization['game_over'], True, (255, 0, 0))
-                    r = t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
-                    self.sc.blit(t, r)
+
+            elif health <= 0:
+                t = self.font.render(self.localization['game_over'], True, (255, 0, 0))
+                r = t.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
+                self.sc.blit(t, r)
             else:
                 t = self.font.render(self.localization['disconnected'], True, (0, 0, 0))
                 t1 = self.font.render(
@@ -1673,6 +1769,8 @@ class StartMenu:
             pygame.display.update()
 
 
+GAME_VERSION = 'version UNDEFINED'
+
 RECONNECTING = False
 
 players = {}
@@ -1689,7 +1787,15 @@ main: Main
 
 
 def resetGlobals():
-    global players, bullets, nextFrameUpdate, health, RECONNECTING, main
+    global players, bullets, nextFrameUpdate, health, RECONNECTING, main, GAME_VERSION
+
+    try:
+        __f = open('version.txt', 'r', encoding='utf-8')
+        GAME_VERSION = __f.read()
+        __f.close()
+    except Exception as __e:
+        print("Failed to read game version from the file version.txt. Exception", __e)
+        GAME_VERSION = 'version UNKNOWN'
 
     RECONNECTING = False
     players = {}

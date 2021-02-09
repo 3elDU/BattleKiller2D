@@ -49,7 +49,10 @@ class Game:
     """
 
     def __init__(self, name: str):
+        self.players: [Client]
         self.players = []
+        # Storing timestamp when last player joined
+        self.whenLastPlayerJoined = time.time()
 
         self.name = name
         # Unique game id.
@@ -92,6 +95,11 @@ class Game:
         # So, for example first player will have key 0, second will have 1, and so on.
         self.i = 0
 
+    def stopGame(self):
+        client: Client
+        for client in self.players:
+            client.disconnect('Game was shut down.')
+
     def addPlayer(self, sock: socket.socket, addr: tuple):
         player = Player(0, 0, 'grass', 100, str(self.i))
 
@@ -100,6 +108,10 @@ class Game:
         self.players.append(client)
 
         self.i += 1
+
+        self.whenLastPlayerJoined = time.time()
+
+        self.broadcastMessage('New player joined the game!')
 
     def getPlayersOnline(self) -> int:
         playersOnline = 0
@@ -343,6 +355,7 @@ class Client:
                     self.game.commandsFromClients.append([self.clientID, cmd])
 
                 elif message == 'disconnect':
+                    self.game.whenLastPlayerJoined = time.time()
                     self.disconnected = True
                     self.player.active = False
                     self.game.playersLeft.append(self.clientID)
@@ -464,6 +477,7 @@ class Client:
 
         except Exception as e:
             print(self.game.getGameIDString(), "Exception while handling", self.getNickname(), "'s messages:\n", e)
+            self.__messagesFromClient.clear()
             print()
             traceback.print_exc()
 
@@ -527,17 +541,18 @@ class Client:
         if reason is None:
             reason = main.config.get('shutdown_message')
 
-        try:
-            self.player.active = False
-            self.game.playersLeft.append(self.clientID)
+        if self.player.active:
+            try:
+                self.player.active = False
+                self.game.playersLeft.append(self.clientID)
 
-            self.s.setblocking(True)
+                self.s.setblocking(True)
 
-            msg = 'disconnect/' + reason + ';'
-            self.s.send(msg.encode('utf-8'))
-            self.disconnected = True
-        except Exception as e:
-            print(self.game.getGameIDString(), "Exception while trying to disconnect", self.getNickname(), e)
+                msg = 'disconnect/' + reason + ';'
+                self.s.send(msg.encode('utf-8'))
+                self.disconnected = True
+            except Exception as e:
+                print(self.game.getGameIDString(), "Exception while trying to disconnect", self.getNickname(), e)
 
 
 class Level:
@@ -659,6 +674,8 @@ class Lobby:
             try:
                 # If player wants to disconnect
                 if msg == 'disconnect':
+                    print("Player has left from the lobby.")
+                    self.players.remove([sock, addr])
                     sock.close()
                 # If players wants to see all active games
                 elif msg == 'get_games':
@@ -682,7 +699,13 @@ class Lobby:
                 # If player wants to create the game
                 elif 'create_game' in msg:
                     print("\nCreating new game")
-                    g = Game('Game ' + str(len(main.games)))
+
+                    msg = msg.split('/')
+                    if len(msg) == 1:
+                        g = Game('Game ' + str(len(main.games)))
+                    else:
+                        g = Game(str(msg[1]))
+
                     g.addPlayer(sock, addr)
                     self.players.remove([sock, addr])
                     main.games.append(g)
@@ -710,6 +733,8 @@ class Main:
     def __init__(self):
         global main
         main = self
+
+        print("\nStarting BattleKiller2D server", GAME_VERSION, "\n")
 
         self.lobby = Lobby()
         self.games: [Game]
@@ -770,8 +795,19 @@ class Main:
         except socket.error:
             pass
 
+    def __stopInactiveGames(self):
+        for game in self.games:
+            # Stopping all games which have no players online and no players have joined to them in last 300 seconds.
+            if game.getPlayersOnline() == 0 and time.time() - game.whenLastPlayerJoined >= 300:
+                print('\n' + game.getGameIDString(), "is inactive. Stopping it.")
+                game.stopGame()
+                self.games.remove(game)
+
     def update(self) -> None:
         try:
+            # Deleting inactive games
+            self.__stopInactiveGames()
+
             # Accepting clients
             self.__acceptNewClients()
 
@@ -782,6 +818,8 @@ class Main:
             for game in self.games:
                 game.update()
 
+            time.sleep(1/20)
+
         except Exception as e:
             print("CRITICAL SERVER ERROR: ", e)
             traceback.print_exc()
@@ -789,9 +827,9 @@ class Main:
     def shutDown(self):
         print("\nShutting down server.")
         for game in self.games:
-            client: Client
-            for client in game.players:
-                client.disconnect()
+            game.stopGame()
+            time.sleep(0.2)
+        time.sleep(1)
         self.s.close()
         self.s.detach()
 
@@ -869,6 +907,14 @@ class GUI:
 
 
 if __name__ == '__main__':
+    try:
+        __f = open('version.txt', 'r', encoding='utf-8')
+        GAME_VERSION = __f.read()
+        __f.close()
+    except Exception as __e:
+        print("Failed to read game version from the file version.txt. Exception", __e)
+        GAME_VERSION = 'version UNKNOWN'
+
     print("Reading server config at server_settings.txt")
     __f = open('server_settings.txt', 'r', encoding='utf-8')
     __c = eval(__f.read())
