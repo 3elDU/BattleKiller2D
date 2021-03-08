@@ -2,10 +2,20 @@ import random
 import socket
 import time
 import traceback
+import os
 from tkinter import *
 
 MAP_W = 16
 MAP_H = 8
+
+
+def clamp(val, mn, mx):
+    if val < mn:
+        return mn
+    elif val > mx:
+        return mx
+    else:
+        return val
 
 
 class Player:
@@ -36,6 +46,499 @@ class Damage:
         self.damager = damager
 
 
+class Colors:
+    black = (0, 0, 0)
+    white = (255, 255, 255)
+    red = (200, 50, 50)
+    green = (50, 200, 50)
+    blue = (50, 50, 200)
+
+    colors = {'black':black, 'white':white, 'red':red, 'green':green, 'blue':blue}
+
+
+class Storage:
+    def __init__(self, size):
+        self.__memorySize = size
+        self.__memory = []
+        # Filling memory
+        for i in range(size):
+            self.__memory.append('')
+
+    def getSize(self):
+        return self.__memorySize
+    def setSize(self, newSize: int):
+        if newSize != 0:
+            if newSize > self.__memorySize:
+                newMem = self.__memory.copy()
+                for i in range(newSize - self.__memorySize):
+                    newMem.append('')
+                self.__memory = newMem
+                self.__memorySize = newSize
+            elif newSize < self.__memorySize:
+                self.__memory = self.getMemoryArea(0, newSize)
+                self.__memorySize = newSize
+
+    def setMemory(self, new: [str]):
+        for i in range(self.__memorySize):
+            if i < self.__memorySize:
+                if i > len(new):
+                    self.__memory[i] = ''
+                elif i < len(new):
+                    self.__memory[i] = new[i]
+    def setMemoryArea(self, start: int, mem: [str]):
+        if 0 <= start < self.__memorySize:
+            for i in range(start, start+len(mem)):
+                if i < self.__memorySize:
+                    self.__memory[i] = mem[i]
+    def setMemoryAt(self, index: int, value: str):
+        if 0 <= index < self.__memorySize: self.__memory[index] = value
+
+    def fillMemory(self, value: str):
+        for i in range(self.__memorySize):
+            self.__memory[i] = value
+    def fillMemoryArea(self, indexfrom: int, indexto: int, value: str):
+        if 0 <= indexfrom < indexto < self.__memorySize:
+            for i in range(indexfrom, indexto):
+                self.__memory[i] = value
+
+    def getMemory(self) -> [str]: return self.__memory.copy()
+    def getMemoryArea(self, indexfrom: int, indexto: int) -> [str]:
+        mem = []
+        if 0 <= indexfrom < indexto < self.__memorySize:
+            for i in range(indexfrom, indexto):
+                mem.append(self.__memory[i])
+        if len(mem) == 0: mem = ['']
+        return mem
+    def getMemoryAt(self, index: int) -> str:
+        if 0 <= index < self.__memorySize: return self.__memory[index]
+        else: return ''
+
+    def getFreeSpace(self) -> int:
+        return self.__memory.count('')
+
+
+class Screen:
+    def __init__(self, width, height):
+        self.width, self.height = width, height
+
+        self.__background = Storage(self.width*self.height)
+        self.__background.fillMemory(Colors.black)
+
+        self.__foreground = Storage(self.width*self.height)
+        self.__foreground.fillMemory(Colors.white)
+
+        self.__screen = Storage(self.width*self.height)
+        self.__screen.fillMemory('')
+
+        self.cursorx = 0
+        self.cursory = 0
+
+        self.__curbg = Colors.black
+        self.__curfg = Colors.white
+
+    def setBackground(self, color: (int, int, int)): self.__curbg = color
+    def setForeground(self, color: (int, int, int)): self.__curfg = color
+    def setScreen(self, newScreen):
+        self.__background.setMemory(newScreen.getBackgroundScreen().copy())
+        self.__foreground.setMemory(newScreen.getForegroundScreen().copy())
+        self.__screen.setMemory(newScreen.getScreen().copy())
+
+    def fill(self, xfrom: int, yfrom: int, xto: int, yto: int, value: str):
+        for y in range(yfrom, yto):
+            for x in range(xfrom, xto):
+                self.__background.setMemoryAt(y*self.width+x, self.__curbg)
+                self.__foreground.setMemoryAt(y*self.width+x, self.__curfg)
+                self.__screen.setMemoryAt(y*self.width+x, value)
+
+    def print(self, text: str, x=None, y=None):
+        if x is None: x = self.cursorx
+        if y is None: y = self.cursory
+
+        # print(text)
+
+        for character in range(len(text)):
+            if 0 <= x + character < self.width and 0 <= y < self.height:
+                index = y * self.width + x + character
+                self.__background.setMemoryAt(index, self.__curbg)
+                self.__foreground.setMemoryAt(index, self.__curfg)
+                self.__screen.setMemoryAt(index, text[character])
+
+    def getScreen(self): return self.__screen.getMemory()
+    def getBackgroundScreen(self): return self.__background.getMemory()
+    def getForegroundScreen(self): return self.__foreground.getMemory()
+
+
+class Interpreter:
+    def __print(self, arguments: []):
+        text = ''
+
+        split = ' '
+        for arg in range(len(arguments)):
+            text += str(arguments[arg])
+            if arg < len(arguments) - 1:
+                text += split
+
+        self.computer.tempScreen.print(text)
+
+    def __setvar(self, arguments: []):
+        if len(arguments) == 2 and type(arguments[0]) == str:
+            self.variables[arguments[0]] = arguments[1]
+            if self.log: print("Set variable", arguments[0], "to value", arguments[1])
+
+    def __increment(self, arguments: []):
+        if len(arguments) == 1:
+            if arguments[0] in self.variables and type(self.variables[arguments[0]]) in [int, float]:
+                self.variables[arguments[0]] += 1
+                if self.log: print("Incrementing variable", arguments[0])
+
+    def __setCursor(self, arguments: []):
+        if len(arguments) == 2 and [type(arg) for arg in arguments] == [int, int]:
+            try:
+                x, y = arguments[0], arguments[1]
+
+                if 0 <= x < self.computer.screenWidth:
+                    self.computer.tempScreen.cursorx = x
+                if 0 <= y < self.computer.screenHeight:
+                    self.computer.tempScreen.cursory = y
+
+                if self.log: print("Set cursor to ", x, y)
+            except: pass
+    def __setBackground(self, arguments: []):
+        if len(arguments) == 1:
+            if arguments[0] in Colors.colors:
+                self.computer.tempScreen.setBackground(Colors.colors[arguments[0]])
+    def __setForeground(self, arguments: []):
+        if len(arguments) == 1:
+            if arguments[0] in Colors.colors:
+                self.computer.tempScreen.setForeground(Colors.colors[arguments[0]])
+    def __clearScreen(self, arguments: []):
+        self.computer.tempScreen.fill(0, 0, self.computer.tempScreen.width, self.computer.tempScreen.height, ' ')
+    def __renderScreen(self, argments: []):
+        self.computer.screen.setScreen(self.computer.tempScreen)
+
+    def reset(self):
+        self.variables: {str: any}
+        self.variables = {}
+
+        self.points: {str: int}
+        self.points = {}
+
+        self.functions = {}
+        # {functionName: [lineWhereFunctionStarts, numberOfParameters, [functionCode]]}
+        self.customFunctions: {str: [int, [str], [str]]}
+        self.customFunctions = {}
+
+        # Input that has been redirected from the client to here.
+        self.input: [str]
+        self.input = []
+
+        self.currentCommand = [0]
+
+        self.addFunction('print', self.__print)
+        self.addFunction('setvar', self.__setvar)
+        self.addFunction('increment', self.__increment)
+        self.addFunction('setcursor', self.__setCursor)
+        self.addFunction('setbackground', self.__setBackground)
+        self.addFunction('setforeground', self.__setForeground)
+        self.addFunction('clearscreen', self.__clearScreen)
+        self.addFunction('renderscreen', self.__renderScreen)
+
+    def __init__(self, log, computer):
+        self.reset()
+
+        self.log = log
+        self.computer = computer
+
+        # Storage with program data
+        self.storage: Storage
+        self.storage = self.computer.getStorageToLoadFrom()
+
+    def tick(self):
+        self.__execute(self.log)
+
+    def addInput(self, string: str):
+        self.input.append(string)
+
+    # Used to add internal funcitons like print, and for user to add functions
+    def addFunction(self, name: str, func):
+        self.functions[name] = func
+
+    def callFunction(self, name: str, arguments: list = []):
+        if name in self.functions:
+            self.functions[name](arguments)
+        elif name in self.customFunctions:
+            if len(arguments) == len(self.customFunctions[name][1]):
+                if len(self.currentCommand) > 0:
+                    self.currentCommand[len(self.currentCommand)-1] += 1
+                self.currentCommand.append(self.customFunctions[name][0])
+
+    # Received string arguments, returns python list with them
+    # Example: (3.14, 'hello world', getvar variableName) return [3.14, 'hello, world', 5]
+    def __parseArguments(self, args: str) -> list:
+        resultArgs = []
+
+        rawArgs = args.replace(', ', ',')
+        if rawArgs.startswith('('): rawArgs = rawArgs[1::]
+        if rawArgs.endswith(')'): rawArgs = rawArgs[:len(rawArgs)-1]
+        rawArgs = rawArgs.replace('(', '').replace(')', '').split(',')
+
+        if self.log: print("Arguments:", rawArgs, end=' ')
+
+        for argument in rawArgs:
+            if argument:
+                if argument.startswith('"') or argument.startswith("'"):
+                    string = ''
+                    for i in range(args.index(argument)+1, len(args)):
+                        if args[i] == '"' or args[i] == "'":
+                            break
+                        else:
+                            string += args[i]
+                    resultArgs.append(string)
+
+                elif type(argument) == str and argument.startswith('getvar '):
+                    if argument.replace('getvar ', '') in self.variables:
+                        resultArgs.append(self.variables[argument.replace('getvar ', '')])
+                    else:
+                        resultArgs.append('undefined')
+                elif argument == 'getinput':
+                    if len(self.input) > 0:
+                        resultArgs.append(self.input[0])
+                        del self.input[0]
+                elif argument == 'getinputline':
+                    if self.log: print(self.input)
+                    if len(self.input) > 0 and '\n' in self.input:
+                        text = ''.join([i for i in self.input]).split('\n')[0]
+                        resultArgs.append(text)
+                        for char in text:
+                            self.input.remove(char)
+                        self.input.remove('\n')
+
+                else:
+                    if '"' in argument or "'" in argument:
+                        s = str(argument)
+                        s = s.replace(s[0], '')
+                        resultArgs.append(s)
+                    elif '.' in argument:
+                        try:
+                            resultArgs.append(float(argument))
+                            continue
+                        except: pass
+                    else:
+                        try:
+                            resultArgs.append(int(argument))
+                            continue
+                        except: pass
+
+                        try:
+                            resultArgs.append(str(argument))
+                            continue
+                        except: pass
+
+        if self.log: print("; Resulting arguments:", resultArgs)
+
+        return resultArgs
+
+    def __execute(self, log=False):
+        try:
+            self.variables['freespace'] = self.storage.getFreeSpace()
+
+            curCommandLayer = self.currentCommand[len(self.currentCommand)-1]
+            curCommand = self.currentCommand[len(self.currentCommand)-1]
+
+            rawline = self.storage.getMemoryAt(curCommand).replace('\n', '')
+            if rawline.startswith('    '):
+                rawline = ''.join(rawline.split('    ')[1::])
+
+            line = rawline.replace(';', '')
+            line = line.replace('\n', '').split(' ')
+
+            nextCommand = curCommand + 1
+
+            lineIsComment = False
+            for char in rawline:
+                if char == '#': lineIsComment = True
+                elif char != ' ': break
+
+            if line and not lineIsComment:
+                if self.log: print(self.currentCommand, line, '    ', self.variables)
+
+                if len(line) >= 1:
+                    # Processor will halt at current command, and won't go any further
+                    if line[0].startswith('halt'):
+                        if log: print("Halting")
+                        nextCommand = curCommand
+                    elif line[0] == 'point':
+                        if len(line) == 2:
+                            self.points[line[1]] = curCommand
+                            if log: print("Created point with name", line[1], "at line", curCommand)
+                    elif line[0] == 'jumpto':
+                        if len(line) == 2 and line[1] in self.points:
+                            nextCommand = self.points[line[1]]
+                            if log: print("Jumping to point with name", line[1], "at line", self.points[line[1]])
+                    elif line[0].startswith('function'):
+                        try:
+                            print(rawline)
+
+                            functionName = ''
+                            functionParameters = []
+                            functionLines = []
+
+                            # Scanning function name
+                            for char in line[1]:
+                                if char == '(': break
+                                else: functionName += char
+
+                            # Scanning function parameters
+                            params = rawline.split('(')[1].replace(', ', ',')
+                            params = params[0:len(params)-1]
+                            functionParameters = params.split(',')
+
+                            scanned = False
+                            curline = curCommand
+                            while not scanned:
+                                if curline < self.storage.getSize():
+                                    l = self.storage.getMemoryAt(curline).replace('\n', '')
+                                    if l.startswith('end'): break
+                                    else: functionLines.append('')
+                                else:
+                                    scanned = True
+
+                                curline += 1
+
+                            funcStart = curline-len(functionLines)+1
+                            self.customFunctions[functionName] = [funcStart, functionParameters]
+
+                            nextCommand = curline
+
+                            print("Function name:", functionName)
+                            print("Function parameters:", functionParameters)
+                            print("Function code:", functionLines)
+                        except:
+                            print("Error while creating a function:")
+                            traceback.print_exc()
+                    # elif line[0] == 'if':
+                    #     if len(line) == 2 and line[1] in self.variables:
+                    #
+                    elif line[0].startswith('end'):
+                        if len(self.currentCommand) > 1:
+                            self.currentCommand.pop()
+                            nextCommand = self.currentCommand[len(self.currentCommand)-1]
+
+                    else:
+                        l = rawline.split('(')
+                        if len(l) > 1:
+                            functionName = l[0]
+                            del l[0]
+                            args = "".join(l)
+                            args = args[0:len(args)-1]
+                            if log: print("Calling function", functionName, "with arguments", args)
+                            self.callFunction(functionName, self.__parseArguments(args))
+                            if functionName in self.customFunctions:
+                                nextCommand = self.customFunctions[functionName][0]
+
+                    # elif line[0] == 'setcursor':
+                    # elif line[0] == 'setbg' or line[0] == 'setfg':
+                    #     pass
+            self.currentCommand[len(self.currentCommand)-1] = nextCommand
+        except Exception as e:
+            print("Exception in Interpreter.__execute()", e)
+            traceback.print_exc()
+
+class Computer:
+    def __init__(self, game, x, y):
+        self.x, self.y = x, y
+        self.game = game
+        self.game.level.replaceBlockAttributes(self.x, self.y, {'electrical': True, 'energy': 0})
+
+        self.on = False
+
+        self.cursorx = 0
+        self.cursory = 0
+
+        self.screenWidth = 32
+        self.screenHeight = 8
+
+        self.screen = Screen(self.screenWidth, self.screenHeight)
+        self.tempScreen = Screen(self.screenWidth, self.screenHeight)
+        self.prevFrameScreen = self.screen.getScreen()
+        self.prevFrameBackground = self.screen.getBackgroundScreen()
+        self.prevFrameForeground = self.screen.getForegroundScreen()
+
+        self.bootloader = Storage(512)
+        self.bootloader.setMemory(
+        """
+function addSomething(a, b);
+    setcursor(0, 2);
+    print('printing something!');
+    setvar(something, '123');
+end;
+
+clearscreen();
+
+setcursor(0, 0);
+print('before running:', getvar something);
+
+addSomething(5, 6);
+
+setcursor(0, 1);
+print('after running:', getvar something);
+
+renderscreen();
+
+halt;
+        """.split(';'))
+
+        self.mainDrive = Storage(4096)
+        self.disk = Storage(2048)
+
+        # Storage which computer will load from
+        self.__loadFromStorage = self.bootloader
+
+        self.interpreter = Interpreter(True, self)
+
+        self.changedPixels = []
+
+    def startup(self):
+        self.on = True
+        self.interpreter.reset()
+
+    def update(self):
+        try:
+            if 'energy' in self.game.level.attributes[self.x, self.y] and self.game.level.attributes[self.x, self.y]['energy'] <= 0:
+                self.on = False
+            elif self.on == False:
+                self.interpreter.reset()
+
+            if self.on:
+                self.interpreter.tick()
+
+                self.game.level.setBlockAttribute(self.x, self.y, 'screen',
+                    str(self.screen.width) + '-' + str(self.screen.height) + '-' + str(self.screen.getScreen())+'-'+str(self.screen.getBackgroundScreen())+'-'+str(self.screen.getForegroundScreen())
+                )
+
+                if self.screen.getScreen() != self.prevFrameScreen or \
+                   self.screen.getBackgroundScreen() != self.prevFrameBackground or \
+                   self.screen.getForegroundScreen() != self.prevFrameForeground:
+                    self.game.changedBlocks.append([self.x, self.y])
+
+                self.prevFrameScreen = self.screen.getScreen()
+                self.prevFrameBackground = self.screen.getBackgroundScreen()
+                self.prevFrameForeground = self.screen.getForegroundScreen()
+
+        except Exception as e:
+            print("Exception in Computer.update()", e)
+            traceback.print_exc()
+
+    def getChangedPixels(self):
+        return self.changedPixels
+
+    def getScreen(self):
+        return self.screen
+
+    def getStorageToLoadFrom(self) -> Storage:
+        return self.bootloader
+
+
 class Game:
     @staticmethod
     def generateGameID() -> str:
@@ -48,30 +551,60 @@ class Game:
     name is string, name of the game, which will be displayed to other clients.
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, gameId=None,
+                 level=None  # If level will be not none, it will be used as level
+                 ):
         self.players: [Client]
         self.players = []
         # Storing timestamp when last player joined
         self.whenLastPlayerJoined = time.time()
+        self.playerHasJoined = False
 
         self.name = name
         # Unique game id.
-        self.gameID = self.generateGameID()
+        if gameId is not None:
+            self.gameID = gameId
+        else:
+            self.gameID = self.generateGameID()
+
+        # 0 is day, 0.5 is night, 1 is again day
+        self.timeofday = 0
 
         # Generating level
         print("Initializing level for game", self.getGameIDString())
         self.level = Level(self)
-        print("Generating level for game", self.getGameIDString())
-        self.level.generateLevel()
+        if level is not None:
+            try:
+                lvl = level
+                if type(lvl) == str:
+                    lvl = eval(lvl)
+
+                self.level.setLevel(lvl)
+            except Exception as e:
+                print(self.getGameIDString(), "Failed to inialize level from variable:", e)
+                self.level.generateLevel()
+        else:
+            print("Generating level for game", self.getGameIDString())
+            self.level.generateLevel()
+
+        self.computers: [Computer]
+        self.computers = []
+        self.computerUpdatesPerSecond = main.config.get('computerClockSpeed')
+        self.__lastComputersUpdate = time.time()
 
         # Spawnpoint where joined players will appear
         print("Creating spawnpoint ", end='')
-        self.spawn = Spawnpoint(random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1))
-        self.level.level[self.spawn.x, self.spawn.y] = 'grass'
-        print("at", self.spawn.x, self.spawn.y, "for game", self.getGameIDString())
+        generated = False
+        while not generated:
+            x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
+            if self.level.level[x, y] == 'grass':
+                self.spawn = Spawnpoint(x, y)
+                print("at", self.spawn.x, self.spawn.y, "for game", self.getGameIDString())
+                break
 
         self.lastBulletUpdate = time.time()
         self.lastBoostSpawn = time.time()
+        self.lastWireUpdate = time.time()
 
         self.bullets = []
         self.bullets: [Bullet]
@@ -90,6 +623,9 @@ class Game:
         self.commandsFromClients = []
         self.serviceMessages = []
 
+        self.__lastGameUpdate = time.time()
+        self.gameUpdatesPerSecond = main.config.get('tickSpeed')
+
         # For storing and normal handling of players.
         # Each new player will be stored with key i+1
         # So, for example first player will have key 0, second will have 1, and so on.
@@ -99,6 +635,12 @@ class Game:
         client: Client
         for client in self.players:
             client.disconnect('Game was shut down.')
+
+        if main.config.get('saveGames'):
+            print(self.getGameIDString(), "saving game level.")
+            f = open('savedGames/' + self.name + '.' + self.gameID + '.level', 'w')
+            f.write(str(self.level.level))
+            f.close()
 
     def addPlayer(self, sock: socket.socket, addr: tuple):
         player = Player(0, 0, 'grass', 100, str(self.i))
@@ -110,6 +652,7 @@ class Game:
         self.i += 1
 
         self.whenLastPlayerJoined = time.time()
+        self.playerHasJoined = True
 
         self.broadcastMessage('New player joined the game!')
 
@@ -230,6 +773,11 @@ class Game:
 
             self.lastBulletUpdate = time.time()
 
+    def __updateComputers(self):
+        computer: Computer
+        for computer in self.computers:
+            computer.update()
+
     def __deleteDisconnectedPlayers(self):
         player: Client
         for player in self.players:
@@ -249,29 +797,44 @@ class Game:
                         self.spawn = Spawnpoint(x, y)
                         created = True
 
-            self.__updateClients()
-            self.__updateChangedData()
-            self.__processCommands()
-            # self.__deleteDisconnectedPlayers()
+            if time.time() - self.lastWireUpdate >= 1/self.gameUpdatesPerSecond:
+                self.level.updateLevel()
+                self.lastWireUpdate = time.time()
 
-            # Spawning chests ( only if there is at least one player online )
-            if time.time() - self.lastBoostSpawn >= 60 and self.getPlayersOnline() > 0:
-                print(self.getGameIDString(), "Spawning new ", end='')
-                spawned = False
-                while not spawned:
-                    x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
-                    if self.level.level[x, y] == 'grass':
-                        if random.randint(0, 4) == 0:
-                            print("health boost")
-                            self.level.setBlock(x, y, 'heart')
-                        else:
-                            print("chest")
-                            self.level.createChest(x, y)
-                        spawned = True
+            if time.time() - self.__lastComputersUpdate >= 1/self.computerUpdatesPerSecond:
+                self.__updateComputers()
+                self.__lastComputersUpdate = time.time()
 
-                self.lastBoostSpawn = time.time()
+            if time.time() - self.__lastGameUpdate >= 1/self.gameUpdatesPerSecond:
+                self.__updateClients()
+                self.__updateChangedData()
+                self.__processCommands()
 
-            self.__updateBullets()
+                # self.__deleteDisconnectedPlayers()
+
+                # Spawning chests ( only if there is at least one player online )
+                if time.time() - self.lastBoostSpawn >= 60 and self.getPlayersOnline() > 0:
+                    print(self.getGameIDString(), "Spawning new ", end='')
+                    spawned = False
+                    while not spawned:
+                        x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
+                        if self.level.level[x, y] == 'grass':
+                            if random.randint(0, 4) == 0:
+                                print("health boost")
+                                self.level.setBlock(x, y, 'heart')
+                            else:
+                                print("chest")
+                                self.level.createChest(x, y)
+                            spawned = True
+
+                    self.lastBoostSpawn = time.time()
+
+                self.timeofday += 1/2400
+                if self.timeofday >= 1: self.timeofday = 0
+
+                self.__updateBullets()
+
+                self.__lastGameUpdate = time.time()
 
         except Exception as e:
             print(self.getGameIDString(), "CRITICAL GAME ERROR: ", e)
@@ -345,6 +908,7 @@ class Client:
 
     def __handleMessages(self) -> None:
         try:
+            # if self.__messagesFromClient: print(self.__messagesFromClient)
             for message in self.__messagesFromClient:
                 if message == 'alive':
                     self.lastAliveMessage = time.time()
@@ -362,12 +926,29 @@ class Client:
                     self.s.close()
                     print(self.game.getGameIDString(), self.getNickname(), "with address", self.a, "disconnected.")
 
+                elif message == 'unity_get_level':
+                    print(self.game.getGameIDString(), self.getNickname(), " (unity client) loaded the map.")
+                    m = ''
+                    for x in range(MAP_W):
+                        for y in range(MAP_H):
+                            m += self.game.level.level[x, y]
+                            if y < MAP_H-1: m += '^'
+                            elif x < MAP_W-1: m += '~'
+                            
+
+                    s = 'map' + m
+                    print(self.game.level.level)
+                    print(s)
+                    self.dataToSend.append(s)
                 elif message == 'get_level':
                     print(self.game.getGameIDString(), self.getNickname(), "loaded the map.")
                     self.dataToSend.append('map' + str(self.game.level.level))
+                    self.dataToSend.append('attributes' + str(self.game.level.attributes))
 
                 elif message == 'get_objects':
                     m = ''
+
+                    m += 'timeofday/' + str(self.game.timeofday) + ';'
 
                     m += 'yourid/' + str(self.clientID) + ';'
 
@@ -387,9 +968,11 @@ class Client:
                              + '/' + str(b.movX) + '/' + str(b.movY) \
                              + '/' + str(b.color) + '/' + str(b.active) + ';'
 
+                    # print(self.changedBlocks)
                     for block in range(len(self.changedBlocks)):
-                        b = self.changedBlocks[block]
-                        m += 'cb/' + str(b[0]) + '/' + str(b[1]) + '/' + b[2] + ';'
+                        x, y = self.changedBlocks[block]
+                        m += 'cb/' + str(x) + '/' + str(y) + '/' + self.game.level.level[x, y] + '/' + \
+                             str(self.game.level.attributes[x, y]) + ';'
 
                     for b in self.changedObjects:
                         m += 'o/' + str(b[0]) + '/' + str(b[1]) + '/' + str(b[2]) + '/' + str(b[3]) + ';'
@@ -429,11 +1012,21 @@ class Client:
 
                     self.player = p
                 elif 'set_block' in message:
+                    # print(message)
+
                     message = message.replace('set_block', '').split('/')
 
-                    self.game.level.level[int(message[0]), int(message[1])] = message[2]
+                    x, y, block = int(message[0]), int(message[1]), message[2]
 
-                    self.game.changedBlocks.append([int(message[0]), int(message[1]), message[2]])
+                    self.game.level.level[x, y] = block
+                    if len(message) > 3:
+                        self.game.level.attributes[x, y] = eval(message[3])
+
+                    if 'computer' in block:
+                        c = Computer(self.game, x, y)
+                        self.game.computers.append(c)
+
+                    self.game.changedBlocks.append([int(message[0]), int(message[1])])
                 elif 'shoot' in message:
                     message = message.replace('shoot', '').split('/')
 
@@ -467,6 +1060,14 @@ class Client:
                     message = message.replace('attack', '').split('/')
 
                     self.game.playersDamaged.append(Damage(int(message[1]), int(message[0]), self.clientID))
+                elif 'computer_input' in message:
+                    message = message.replace('computer_input', '').split('/')
+
+                    x,y, char = int(message[0]), int(message[1]), message[2]
+
+                    for computer in self.game.computers:
+                        if computer.x == x and computer.y == y:
+                            computer.interpreter.addInput(char)
 
                 else:
                     if message:
@@ -562,11 +1163,149 @@ class Level:
         self.level: {(int, int): str}
         self.level = {}
 
+        self.attributes: {(int, int): dict}
+        self.attributes = {}
+
+        self.__prevFrameAttributes: {(int, int): dict}
+        self.__prevFrameAttributes = {}
+
+        self.__prevFrameBlocks: {(int, int): str}
+        self.__prevFrameBlocks = {}
+
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                self.level[x, y] = 'grass'
+                self.attributes[x, y] = {}
+
+        self.__updateMapBuffer()
+
         self.__generated = False
+
+    def __updateMapBuffer(self):
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                try:
+                    self.__prevFrameAttributes[x, y] = self.attributes[x, y].copy()
+                    self.__prevFrameBlocks[x, y] = self.level[x, y]
+                except:
+                    self.__prevFrameAttributes[x, y] = {}
+                    self.__prevFrameBlocks[x, y] = 'grass'
+
+    def acceptAllUpdates(self):
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                if self.__prevFrameBlocks[x, y] != self.level[x, y] or \
+                   self.__prevFrameAttributes[x, y] != self.attributes[x, y]:
+                    # print("Changed block at", x, y, "old:", self.__prevFrameBlocks[x, y], "new:", self.level[x, y],
+                    #       '\nold attributes:', self.__prevFrameAttributes[x, y], 'new:', self.attributes[x, y], '\n')
+                    self.game.changedBlocks.append([x, y])
+        self.__updateMapBuffer()
+
+    def declineAllUpdates(self):
+        pass
+
+    def updateLevel(self):
+        # Updating wires
+        wiresUpdated = 0
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                if 'wire' in self.level[x, y]:
+                    variant = ['f', 'f', 'f', 'f']
+                    if x > 0 and 'electrical' in self.attributes[x-1, y] and self.attributes[x, y]['electrical']:
+                        variant[2] = 't'
+                    if x < MAP_W - 1 and 'electrical' in self.attributes[x+1, y] and self.attributes[x, y]['electrical']:
+                        variant[3] = 't'
+                    if y > 0 and 'electrical' in self.attributes[x, y-1] and self.attributes[x, y]['electrical']:
+                        variant[0] = 't'
+                    if y < MAP_H - 1 and 'electrical' in self.attributes[x, y+1] and self.attributes[x, y]['electrical']:
+                        variant[1] = 't'
+
+                    variant = "".join(i for i in variant)
+
+                    if variant != self.attributes[x, y]['rotation']:
+                        a = self.attributes[x, y]
+                        a['rotation'] = variant
+                        self.replaceBlockAttributes(x, y, a)
+                        wiresUpdated += 1
+
+        # if wiresUpdated > 0:
+        #     print("Updated wires:", wiresUpdated)
+
+        positions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                if 'switch' in self.level[x, y] and self.attributes[x, y]['on']:
+
+                    for pos in positions:
+                        x1, y1 = x + pos[0], y + pos[1]
+                        if 0 <= x1 <= MAP_W - 1 and 0 <= y1 <= MAP_H - 1:
+                            if 'wire' in self.level[x1, y1] or 'lamp' in self.level[x1, y1] or 'computer' in self.level[x1, y1]:
+                                if not 'energy_source' in self.attributes[x1, y1] \
+                                   and self.attributes[x1, y1]['energy'] == 0:
+                                    self.setBlockAttribute(x1, y1, 'energy_source', (x, y))
+                                    self.setBlockAttribute(x1, y1, 'energy', 1)
+
+                elif 'wire' in self.level[x, y]:
+                    if 'energy' in self.attributes[x, y] and 'energy_source' in self.attributes[x, y]:
+                        if self.attributes[x, y]['energy'] > 0 and \
+                           'energy' in self.attributes[self.attributes[x, y]['energy_source']] and \
+                           self.attributes[self.attributes[x, y]['energy_source']]['energy'] > 0:
+
+                            for pos in positions:
+                                x1, y1 = x + pos[0], y + pos[1]
+                                if 0 <= x1 <= MAP_W - 1 and 0 <= y1 <= MAP_H - 1:
+                                    if 'wire' in self.level[x1, y1] or 'lamp' in self.level[x1, y1] or 'computer' in self.level[x1, y1]:
+                                        if not 'energy_source' in self.attributes[x1, y1] \
+                                           and self.attributes[x1, y1]['energy'] == 0:
+                                            self.setBlockAttribute(x1, y1, 'energy_source', (x, y))
+                                            self.setBlockAttribute(x1, y1, 'energy', 1)
+                        else:
+                            self.setBlockAttribute(x, y, 'energy', 0)
+                            self.removeBlockAttribute(x, y, 'energy_source')
+                    else:
+                        self.setBlockAttribute(x,y, 'energy', 0)
+                        self.removeBlockAttribute(x,y, 'energy_source')
+                elif 'lamp' in self.level[x, y]:
+                    if 'energy_source' in self.attributes[x, y] and 'energy' in self.attributes[x, y] and \
+                       'energy' in self.attributes[self.attributes[x, y]['energy_source']]:
+                        if self.attributes[x, y]['energy'] <= 0 or \
+                           self.attributes[self.attributes[x, y]['energy_source']]['energy'] <= 0:
+                            self.setBlockAttribute(x,y, 'energy', 0)
+                            self.removeBlockAttribute(x,y, 'energy_source')
+                    else:
+                        self.setBlockAttribute(x, y, 'energy', 0)
+                        self.removeBlockAttribute(x, y, 'energy_source')
+
+        computer: Computer
+        for computer in self.game.computers:
+            if not computer.on and 'energy' in self.attributes[computer.x, computer.y] and \
+               self.attributes[computer.x, computer.y]['energy'] > 0:
+                computer.startup()
+
+        self.acceptAllUpdates()
+
+    def setLevel(self, level: dict):
+        # Checking if there's any missing blocks.
+        lvl = {}
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                if not (x, y) in level:
+                    lvl[x, y] = 'grass'
+                else:
+                    lvl[x, y] = level[x, y]
+        self.level = lvl
 
     def setBlock(self, x: int, y: int, block: str):
         self.level[x, y] = block
-        self.game.changedBlocks.append([x, y, block])
+
+    def setBlockAttribute(self, x: int, y: int, key: str, val: any):
+        self.attributes[x, y][key] = val
+
+    def removeBlockAttribute(self, x: int, y: int, key: str):
+        if key in self.attributes[x, y]: del self.attributes[x, y][key]
+
+    def replaceBlockAttributes(self, x: int, y: int, attribute: dict):
+        self.attributes[x, y] = attribute
 
     def generateBlock(self, x, y):
         r = random.randint(0, 7)
@@ -580,9 +1319,10 @@ class Level:
         if r == 3 and random.randint(0, 3) == 0:
             b = 'heart'
         self.level[x, y] = b
+        self.attributes[x, y] = {}
 
         if self.__generated:
-            self.game.changedBlocks.append([x, y, b])
+            self.game.changedBlocks.append([x, y])
 
     def generateLevel(self):
         gen_start = time.time()
@@ -613,6 +1353,7 @@ class Level:
                 ['sniper_rifle', 1, 0.025],
                 ['knife', 1, 0.5],
                 ['wood', 15, 100],
+                ['planks', 50, 30],
                 ['wall', 15, 100],
                 ['tree', 15, 100]
             ]
@@ -637,7 +1378,7 @@ class Level:
 
         self.level[x, y] = m
         if self.__generated:
-            self.game.changedBlocks.append([x, y, m])
+            self.game.changedBlocks.append([x, y])
 
         return m
 
@@ -669,6 +1410,7 @@ class Lobby:
         self.players = []
 
     def __handleMessage(self, sock: socket.socket, addr: tuple, message: str):
+        print(message)
         # There can be multiple commands in one message, they are split with ;
         for msg in message:
             try:
@@ -684,6 +1426,39 @@ class Lobby:
                         toSend += 'g/' + game.name + '/' + str(game.getPlayersOnline()) + '/' + game.gameID + ';'
                     sock.send(toSend.encode('utf-8'))
                     # print("Sended all active games to player", addr[0])
+                # If player wants to see all archived games ( unloaded games, saved on the disk )
+                elif msg == 'get_archived_games':
+                    toSend = ''
+                    try:
+                        for filename in os.listdir('savedGames/'):
+                            name, gameID, _ = filename.split('.')
+                            # Checking if this game is not active
+                            foundSame = False
+                            for game in main.games:
+                                if game.gameID == gameID: foundSame = True
+
+                            if not foundSame:
+                                toSend += 'g/' + name + '/0/' + gameID + ';'
+                        sock.send(toSend.encode('utf-8'))
+                    except Exception as e:
+                        print("Failed to send archived games to the client:", e)
+                # If player wants to join archived game ( unloaded game, saved on the disk )
+                elif 'join_archived_game' in msg:
+                    print("Player joining the archived game...")
+
+                    gameid = msg.replace('join_archived_game/', '').split('/')[0]
+                    for filename in os.listdir('savedGames/'):
+                        name, gameID, _ = filename.split('.')
+
+                        if gameID == gameid:
+                            f = open('savedGames/' + filename, 'r', encoding='utf-8')
+                            g = Game(name, gameID, f.read())
+                            f.close()
+                            g.addPlayer(sock, addr)
+                            main.games.append(g)
+                            print("Player", addr[0], "joined the game", g.getGameIDString())
+                            self.players.remove([sock, addr])
+                            break
                 # If player wants to join the game
                 elif 'join_game' in msg:
                     print("Player joining the game...")
@@ -693,23 +1468,31 @@ class Lobby:
                     # Finding battle with exact game id
                     for game in main.games:
                         if game.gameID == gameid:
-                            print("Player", addr[0], "joined the game", game.getGameIDString())
                             game.addPlayer(sock, addr)
+                            print("Player", addr[0], "joined the game", game.getGameIDString())
                             self.players.remove([sock, addr])
                 # If player wants to create the game
                 elif 'create_game' in msg:
                     print("\nCreating new game")
 
                     msg = msg.split('/')
+                    name = ''
                     if len(msg) == 1:
-                        g = Game('Game ' + str(len(main.games)))
+                        name = 'Game ' + str(len(main.games))
                     else:
-                        g = Game(str(msg[1]))
+                        name = str(msg[1])
+
+                    found = False
+                    for game in main.games:
+                        if game.name == name:
+                            g = game
+                            found = True
+                    if not found: g = Game(name)
 
                     g.addPlayer(sock, addr)
                     self.players.remove([sock, addr])
                     main.games.append(g)
-                    print(main.games)
+                    #  print(main.games)
 
             except Exception as e:
                 print("Exception while handling messages from client in the lobby:", e)
@@ -764,6 +1547,22 @@ class Main:
             self.ip = socket.gethostbyname(socket.gethostname())
             self.port = 25000
 
+        if self.config.get('loadGames'):
+            for filename in os.listdir('savedGames/'):
+                gameid = 'Undefined'
+                try:
+                    f = open('savedGames/' + filename, 'r', encoding='utf-8')
+                    c = f.read()
+                    f.close()
+
+                    name, gameid, _ = filename.split('.')
+
+                    g = Game(name, gameid, level=c)
+
+                    self.games.append(g)
+                except Exception as e:
+                    print("Failed to load saved level for game", gameid, ": ", e)
+
         print("Starting server on:\nip", self.ip, "\nport", self.port)
 
         # Binding socket
@@ -798,7 +1597,9 @@ class Main:
     def __stopInactiveGames(self):
         for game in self.games:
             # Stopping all games which have no players online and no players have joined to them in last 300 seconds.
-            if game.getPlayersOnline() == 0 and time.time() - game.whenLastPlayerJoined >= 300:
+            if game.playerHasJoined and \
+               game.getPlayersOnline() == 0 and \
+               time.time() - game.whenLastPlayerJoined >= int(self.config.get('inactiveGameTimeout')):
                 print('\n' + game.getGameIDString(), "is inactive. Stopping it.")
                 game.stopGame()
                 self.games.remove(game)
@@ -817,8 +1618,6 @@ class Main:
             # Updating all active games
             for game in self.games:
                 game.update()
-
-            time.sleep(1/20)
 
         except Exception as e:
             print("CRITICAL SERVER ERROR: ", e)

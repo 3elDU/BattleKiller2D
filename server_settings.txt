@@ -7,5 +7,20 @@
 
     'shutdown_message': 'Server closed.',
     'service_message_prefix': '[Server] ',
-    'welcome_message': 'Welcome to my BattleKiller 2D server!'
+    'welcome_message': 'Welcome to my BattleKiller 2D server!',
+
+    # If this option is true, game levels will be saved after server shutdown
+    'saveGames': False,
+    # and loaded again after restart.
+    'loadGames': False,
+
+    # How many times a second computers will update (
+    'computerClockSpeed': 1, # Hz
+    # How many times a second game will update
+    'tickSpeed': 20, # Hz
+
+    # If there are no online players in this game,
+    # and no players have joined them in last (number that you have entered) seconds,
+    # Game will shut down
+    'inactiveGameTimeout': 600
 }

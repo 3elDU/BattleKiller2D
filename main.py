@@ -1,9 +1,11 @@
 import os
+import math
 import traceback
 import pygame
 import socket
 import random
 import time
+from threading import Thread
 
 BLOCK_W = 80
 BLOCK_H = 80
@@ -13,6 +15,219 @@ MAP_H = 8
 
 SCREEN_W = MAP_W * BLOCK_W
 SCREEN_H = (MAP_H + 1) * BLOCK_H
+
+ORIG_SCREEN_W = SCREEN_W
+ORIG_SCREEN_H = SCREEN_H
+
+
+class CustomFont:
+    def __init__(self):
+        self.alphabet = list("""abcdefghijklmnopqrstuvwxyz1234567890                !@#$%^&*()-=_+[]{},./\\?"'|:;""")
+        try:
+            self.__texture = pygame.image.load('textures/alphabet.png').convert_alpha()
+        except Exception as e:
+            print("Failed to load alphabet.txt ( custom font texture atlas )")
+            self.__texture = pygame.Surface((130, 32)).convert_alpha()
+
+    def __replaceColor(self, surface: pygame.Surface, color, newColor):
+        for x in range(surface.get_width()):
+            for y in range(surface.get_height()):
+                if surface.get_at((x, y)) == color:
+                    surface.set_at((x, y), newColor)
+
+    def __image_at(self, rectangle, bg=None, colorkey=None):
+        if bg is None:
+            bg = (255, 255, 255)
+
+        """Load a specific image from a specific rectangle."""
+        # Loads image from x, y, x+offset, y+offset.
+        rect = pygame.Rect(rectangle)
+        image = pygame.Surface(rect.size)
+        image.fill(bg)
+        image.blit(self.__texture, (0, 0), rect)
+        if colorkey is not None:
+            if colorkey == -1:
+                colorkey = image.get_at((0, 0))
+            image.set_colorkey(colorkey, pygame.RLEACCEL)
+        return image
+
+    def render(self, text: str, _, foreground: (int, int, int), background: (int, int, int)) -> pygame.Surface:
+        surf = pygame.Surface((len(text)*6, 8))
+        surf.fill(background)
+
+        for i in range(len(text)):
+            char = text[i].lower()
+            # if char != ' ': print(char, char in self.alphabet)
+            if char in self.alphabet:
+                j = self.alphabet.index(char)
+            else: j = 74 # Question mark
+            x = j%26
+            y = j // 26
+            # print(char, j, x, y)
+
+            # Generating background color that willn't match text color and foreground color
+            generated, bg = False, (0, 0, 0)
+            while not generated:
+                bg = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+                if bg != foreground and bg != (0, 0, 0):
+                    generated = True
+            image = self.__image_at((x*5, y*8, 5, 8), bg=bg)
+            self.__replaceColor(image, (0, 0, 0), foreground)
+            self.__replaceColor(image, bg, background)
+            surf.blit(image, image.get_rect(topleft=(i*6, 0)))
+
+        return surf
+
+
+# For raytracing
+class Ray:
+    def __init__(self, startx, starty, angle, speed, processor):
+        self.startx, self.starty = startx, starty
+        self.x, self.y = self.startx, self.starty
+        self.blockx, self.blocky = int(round(self.x, 0)), int(round(self.y, 0))
+        self.angle = angle
+        self.speed = speed
+        self.proc = processor
+
+        self.distanceTravelled = 0
+
+        self.alive = True
+
+    def tick(self):
+        b: Block
+        while self.alive:
+            self.x += self.speed * math.cos(self.angle*(math.pi/180))
+            self.y += self.speed * math.sin(self.angle*(math.pi/180))
+
+            self.distanceTravelled += abs(self.speed * math.cos(self.angle*(math.pi/180)))
+            self.distanceTravelled += abs(self.speed * math.sin(self.angle*(math.pi/180)))
+
+            self.blockx, self.blocky = self.x//self.proc.lightMapResolution, \
+                                       self.y//self.proc.lightMapResolution
+
+            if self.blockx < 0 or self.blockx >= MAP_W or self.blocky < 0 or self.blocky >= MAP_H:
+                self.alive = False
+                return
+            else:
+                if not main.map.level[self.blockx, self.blocky].transparentForLight:
+                    self.alive = False
+                    return
+
+            pygame.draw.rect(main.map.level[self.x//self.proc.lightMapResolution,
+                                            self.y//self.proc.lightMapResolution].templightmap,
+                             (255, 255, 0),
+                             (int(self.x%self.proc.lightMapResolution), int(self.y%self.proc.lightMapResolution),
+                             1, 1))
+
+
+class RayThread(Thread):
+    def __init__(self, x, y, rays, angleFrom, angleTo, raySpeed, processor):
+        Thread.__init__(self)
+
+        # Starting point
+        self.x, self.y = x, y
+
+        self.nrays = rays
+        self.anglefrom = angleFrom
+        self.angleto = angleTo
+
+        self.speed = raySpeed
+
+        self.proc = processor
+
+        self.rays: [Ray]
+        self.rays = []
+
+        self.done = False
+
+    def run(self) -> None:
+        curangle = self.anglefrom
+        while curangle <= self.angleto:
+            self.rays.append(Ray(self.x * self.proc.lightMapResolution,
+                                 self.y * self.proc.lightMapResolution,
+                                 curangle, self.speed, self.proc))
+
+            curangle += (self.angleto - self.anglefrom) / self.nrays
+
+        while not self.done:
+            for ray in self.rays:
+                ray.tick()
+                if not ray.alive:
+                    self.rays.remove(ray)
+
+            if len(self.rays) == 0: break
+
+        self.done = True
+
+        exit()
+
+
+class LightProcessor:
+    def __init__(self):
+        # Resolution of light map for each block. N by N pixels
+        self.lightMapResolution = 4
+
+        # Some settings
+        self.nthreads = 2
+        self.rays = 240
+        self.rayMultiplier = 360/self.rays
+        self.raysperthread = self.rays // self.nthreads
+        self.rayspeed = 1
+
+        self.threads: [RayThread]
+        self.threads = []
+
+        self.prevFrame: {(int, int): {str, bool, bool}}
+        self.prevFrame = {}
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                self.prevFrame[x, y] = ['', False, False]
+
+        self.lastLightCalculation = time.time()
+
+    def calcLight(self, force=False):
+        for thread in self.threads:
+            if thread.done: self.threads.remove(thread)
+        if len(self.threads) == 0:
+            b: Block
+            for x in range(MAP_W):
+                for y in range(MAP_H):
+                    try:
+                        main.map.level[x, y].lightmap.blit(main.map.level[x, y].templightmap, (0, 0))
+                    except Exception as e:
+                        print("Failed to render lightmap at", x, y, e)
+            main.renderer.renderLightmap()
+
+            currentFrame = {}
+            for x in range(MAP_W):
+                for y in range(MAP_H):
+                    currentFrame[x, y] = main.map.level[x, y].texture, \
+                                         main.map.level[x, y].emittingLight, \
+                                         main.map.level[x, y].transparentForLight
+
+            if currentFrame != self.prevFrame or force:
+                self.threads.clear()
+
+                b: Block
+                for x in range(MAP_W):
+                    for y in range(MAP_H):
+                        b = main.map.level[x, y]
+                        b.templightmap.fill((0, 0, 0))
+
+                for x in range(MAP_W):
+                    for y in range(MAP_H):
+                        if main.map.level[x,y].emittingLight:
+                            for thread in range(self.nthreads):
+                                t = RayThread(x+0.5, y+0.5, self.raysperthread,
+                                              thread*self.raysperthread*self.rayMultiplier,
+                                              (thread+1)*self.raysperthread*self.rayMultiplier,
+                                              self.rayspeed, self)
+                                t.start()
+                                self.threads.append(t)
+
+                self.prevFrame = currentFrame.copy()
+
+                self.lastLightCalculation = time.time()
 
 
 def clamp(val, minimum, maximum):
@@ -30,32 +245,100 @@ class SoundStub:
 
 class Block:
     @staticmethod
-    def getBlockFromID(x, y, blockID: str):
-        if blockID == 'wall':
-            return StoneWall(x, y)
-        elif blockID == 'wooden_door_closed':
-            return Door(x, y)
-        elif blockID == 'wooden_door_opened':
-            d = Door(x, y, True)
-            return d
-        elif blockID == 'heart':
-            return Heart(x, y)
-        elif blockID.split(',')[0] == 'chest':
-            return Chest(x, y, blockID.replace('chest,', ''))
-        elif blockID == 'grass':
-            return Block(x, y, False, False, texture='grass',
-                         name='How you have mined glass block?')
-        else:
-            return Block(x, y, name='Undefined', texture=blockID)
+    def getBlockFromID(x, y, blockID: str, attributes=None):
+        if attributes is None:
+            attributes = {}
+        try:
+            if blockID == 'wall':
+                return StoneWall(x, y)
+            elif blockID == 'tree':
+                return Block(x, y, collidable=False, transparentForLight=True, movementSpeedMultiplier=0.5,
+                             name='Tree', texture='tree')
+            elif blockID == 'wooden_door_closed':
+                return Door(x, y)
+            elif blockID == 'wooden_door_opened':
+                d = Door(x, y, True)
+                return d
+            elif blockID == 'heart':
+                return Heart(x, y)
+            elif blockID.split(',')[0] == 'chest':
+                return Chest(x, y, blockID.replace('chest,', ''))
+            elif blockID == 'grass':
+                return Block(x, y, False, False, transparentForLight=True, texture='grass',
+                             name='How you have mined grass block?')
+            elif 'wire' in blockID:
+                return Wire(x, y, attributes)
+            elif 'lamp' in blockID:
+                return Lamp(x, y, attributes)
+            elif 'switch' in blockID:
+                return Switch(x, y, attributes)
+            elif 'computer' in blockID:
+                return Computer(x, y, attributes)
+            else:
+                return Block(x, y, name=blockID, texture=blockID)
+        except Exception as e:
+            print("Exception in Block.getBlockFromID():", e)
+            traceback.print_exc()
+            return Block(x, y, name='wall', texture='wall')
 
-    def __init__(self, x, y, collidable=True, breakable=True, visible=True, texture='wall', name='Stone wall'):
+    def __setitem__(self, key, value):
+        self.attributes[key] = value
+        main.map.updateBlock(self.x, self.y, self)
+
+    def __getitem__(self, item):
+        if item in self.attributes:
+            return self.attributes[item]
+        else:
+            return ''
+
+    def __init__(self, x, y, collidable=True, breakable=True, visible=True,
+                 emittingLight=False, transparentForLight = False,
+                 texture='wall', name='Stone wall',
+                 attributes=None, movementSpeedMultiplier=1.0):
+        if attributes is None:
+            self.attributes = {}
+        else:
+            self.attributes = attributes
+
         self.collidable = collidable
+        # (works only if block is not collidable). How fast player could walk through this block. 1 is normal speed,
+        # <1 is slower, >1 is faster
+        self.movementSpeedMultiplier = movementSpeedMultiplier
         self.breakable = breakable
         self.visible = visible
+        self.emittingLight = emittingLight
+        self.transparentForLight = transparentForLight
+
         self.texture = texture
         self.name = name
 
+        self.__surf = pygame.Surface((BLOCK_W, BLOCK_H))
+        self.__surf.fill((128, 128, 128))
+
+        self.lightmap = pygame.Surface((main.lightProcessor.lightMapResolution,
+                                        main.lightProcessor.lightMapResolution))
+        self.lightmap.fill((0, 0, 0))
+        self.lightmap.set_colorkey((255, 255, 0))
+        self.lightmap.set_alpha(128)
+
+        self.templightmap = pygame.Surface((main.lightProcessor.lightMapResolution,
+                                            main.lightProcessor.lightMapResolution))
+        self.templightmap.fill((0, 0, 0))
+
         self.x, self.y = x, y
+
+    def renderBlock(self, dest: pygame.Surface, topleftx: int, toplefty: int):
+        dest.blit(main.textures[self.texture.split(',')[0]],
+                  main.textures[self.texture.split(',')[0]].get_rect(topleft=(topleftx, toplefty)))
+    # def renderLightmap(self, dest: pygame.Surface, topleftx: int, toplefty: int):
+        t = pygame.transform.scale(self.lightmap, (BLOCK_W, BLOCK_H))
+        main.renderer.mapsc.blit(t, t.get_rect(topleft=(topleftx, toplefty)))
+
+    def getSurface(self) -> pygame.Surface:
+        return self.__surf
+
+    def updateBlock(self) -> None:
+        self.renderBlock(main.renderer.mapsc, self.x*BLOCK_W, self.y*BLOCK_H)
 
     def breakBlock(self) -> None:
         main.inventory.addInventoryItem(Item(self.name, self.texture, 1, False))
@@ -122,12 +405,112 @@ class Chest(Block):
 
 class Heart(Block):
     def __init__(self, x, y):
-        Block.__init__(self, x, y, breakable=False, texture='heart')
+        Block.__init__(self, x, y, breakable=False, texture='heart', transparentForLight=True)
 
     def interact(self):
         main.defenceLevel += 10
         main.map.setBlock(self.x, self.y, 'grass')
 
+
+class Wire(Block):
+    # Attributes must be:
+    # {
+    # energy: (level of energy. from 0 to 5),
+    # rotation: (from ffff to tttt, t means that wire in this size ( nswe ) is connected to something.
+    # }
+    def __init__(self, x, y, attributes: dict = None):
+        if attributes == {} or attributes is None or not attributes:
+            attributes = {'electrical': True, 'energy': 0, 'rotation': 'tttt'}
+
+        Block.__init__(self, x, y, name='wire', movementSpeedMultiplier=0.8, collidable=False, transparentForLight=True,
+                       texture='wire' + attributes['rotation'], attributes=attributes)
+
+        self.energy = self.attributes['energy']
+
+    def breakBlock(self) -> None:
+        main.inventory.addInventoryItem(Item('wiretttt', 'wiretttt', 1, False))
+
+    def interact(self):
+        # self.attributes['energy_source'] = (self.x, self.y)
+        # self.attributes['energy'] += 1
+        # main.map.updateBlock(self.x, self.y, self)
+        pass
+
+    def updateBlock(self) -> None:
+        self.texture = 'wire' + self.attributes['rotation']
+
+    def renderBlock(self, dest: pygame.Surface, topleftx: int, toplefty: int) -> None:
+        dest.blit(main.textures[self.texture], main.textures[self.texture].get_rect(topleft=(topleftx, toplefty)))
+        pygame.draw.rect(dest, (clamp(self.attributes['energy']*255, 0, 255), 0, 0), (topleftx+BLOCK_W//2-3,
+                                                                                      toplefty+BLOCK_H//2-3,
+                                                                                      5, 5))
+    # def renderLightmap(self, dest: pygame.Surface, topleftx: int, toplefty: int) -> None:
+        t = pygame.transform.scale(self.lightmap, (BLOCK_W, BLOCK_H))
+        dest.blit(t, t.get_rect(topleft=(topleftx, toplefty)))
+
+
+class Lamp(Block):
+    def __init__(self, x, y, attributes: dict = None):
+        if attributes == {} or attributes is None or not attributes:
+            attributes = {'electrical': True, 'energy': 0}
+
+        t = 'lampoff'
+        e = False
+        if attributes['energy'] > 0:
+            t = 'lampon'
+            e = True
+        Block.__init__(self, x, y, name='lamp', texture=t, attributes=attributes, transparentForLight=True)
+        self.emittingLight = e
+
+        self.prevFrameState = self.emittingLight
+
+    def updateBlock(self) -> None:
+        if self.attributes['energy'] > 0:
+            self.texture = 'lampon'
+            self.emittingLight = True
+        else:
+            self.texture = 'lampoff'
+            self.emittingLight = False
+
+
+class Switch(Block):
+    def __init__(self, x, y, attributes: dict = None):
+        if attributes == {} or attributes is None or not attributes:
+            attributes = {'electrical': True, 'on': False, 'energy_source': True, 'energy': 0}
+
+        Block.__init__(self, x, y, name='lamp', texture='switchon', attributes=attributes, transparentForLight=True)
+
+        self.prevFrameAttributes = self.attributes.copy()
+
+    def interact(self):
+        self.attributes['on'] = not self.attributes['on']
+        self.attributes['energy'] = int(self.attributes['on'])
+
+    def updateBlock(self) -> None:
+        if self.attributes['on']:
+            self.texture = 'switchon'
+        else:
+            self.texture = 'switchoff'
+
+        if self.attributes != self.prevFrameAttributes:
+            main.map.updateBlock(self.x, self.y, self)
+
+        self.prevFrameAttrs = self.attributes.copy()
+
+
+class Computer(Block):
+    def __init__(self, x, y, attributes: dict = None):
+        if attributes == {} or attributes is None or not attributes:
+            attributes = {'electrical': True, 'energy': 0}
+
+        Block.__init__(self, x, y, name='Computer', texture='computer', attributes=attributes)
+
+        # if 'screen' in self.attributes:
+        #     print(self.attributes['screen'])
+
+    def interact(self):
+        if self.attributes['energy'] > 0:
+            m = ComputerScreen(main.sc, self.x, self.y)
 
 
 class ChatMessage:
@@ -187,18 +570,18 @@ class Item:
 
 class Pickaxe(Item):
     def __init__(self):
-        super().__init__('pickaxe', 'pickaxe', 1, specialItem=True)
+        super().__init__('Pickaxe', 'pickaxe', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
         if not main.map.level[bx, by].texture == 'grass':
-            main.inventory.addInventoryItem(Item(main.map.level[bx, by].texture, '', 1))
-        main.map.setBlock(bx, by, 'grass')
+            main.map.level[bx, by].breakBlock()
+            main.map.setBlock(bx, by, 'grass')
 
 
 class Hammer(Item):
     def __init__(self):
-        super().__init__('hammer', 'pickaxe', 1, specialItem=True)
+        super().__init__('Hammer', 'hammer', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -220,7 +603,7 @@ class Hammer(Item):
 
 class MagicStick(Item):
     def __init__(self):
-        super().__init__('magic_stick', 'magic_stick', 1, specialItem=True)
+        super().__init__('Magical stick', 'magic_stick', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -231,7 +614,7 @@ class MagicStick(Item):
 
 class Candle(Item):
     def __init__(self):
-        super().__init__('candle', 'candle', 1, specialItem=True)
+        super().__init__('Candle', 'candle', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -247,7 +630,7 @@ class Candle(Item):
 
 class Knife(Item):
     def __init__(self):
-        super().__init__('knife', 'knife', 1, specialItem=True)
+        super().__init__('Knife', 'knife', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -267,7 +650,7 @@ class Knife(Item):
 
 class SniperRifle(Item):
     def __init__(self):
-        super().__init__('sniper_rifle', 'sniper_rifle', 1, specialItem=True)
+        super().__init__('Sniper rifle', 'sniper_rifle', 1, specialItem=True)
         self.specialItem = True
 
     def use(self, bx, by, ox, oy):
@@ -387,7 +770,7 @@ class Inventory:
     def addInventoryItem(self, item: Item):
         i: Item
         for i in self.inventoryItems:
-            if i.name == item.name:
+            if i.name == item.name or i.texture == item.name:
                 i.count += item.count
                 return
 
@@ -439,7 +822,13 @@ class MapManager:
 
     def updateBlock(self, x, y, block: Block):
         self.level[x, y] = block
-        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(block.texture))
+        main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(block.texture) + '/' + str(block.attributes))
+
+    def updateMap(self):
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                self.level[x, y].updateBlock()
+
 
     def setBlock(self, x, y, block):
         try:
@@ -452,7 +841,7 @@ class MapManager:
                 elif block == 'wooden_door_opened':
                     bl = Door(x, y, True)
                 else:
-                    bl = Block.getBlockFromID(x, y, block)
+                    bl = Block.getBlockFromID(x, y, block, {})
             else:
                 bl = block
                 bl.x, bl.y = x, y
@@ -464,7 +853,7 @@ class MapManager:
                 main.sounds['block_place'].play()
 
             self.level[x, y] = bl
-            main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(bl.texture))
+            main.c.sendMessage('set_block' + str(x) + '/' + str(y) + '/' + str(bl.texture) + '/' + str(bl.attributes))
         except:
             print("MapManager.setBlock() exception:")
             traceback.print_exc()
@@ -511,6 +900,9 @@ class Client:
             self.connectionError = True
             self.disconnectReason = 'Error:\n' + err
 
+            errorscreen = ShowConnectionError(self.disconnectReason)
+            errorscreen.display()
+
         self.newMessages = []
 
         self.sent = False
@@ -523,7 +915,8 @@ class Client:
         selectedGame = 0
         joinedGame = False
 
-        lastGamesRequest = time.time()
+        lastGamesRequest = 0
+        viewingArchivedGames = False
         while not joinedGame:
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
@@ -531,6 +924,10 @@ class Client:
                     time.sleep(0.1)
                     exit()
                 elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_a:
+                        viewingArchivedGames = not viewingArchivedGames
+                        games.clear()
+
                     if e.key == pygame.K_UP:
                         if selectedGame > 0: selectedGame -= 1
                         else: selectedGame = len(games)-1
@@ -552,14 +949,18 @@ class Client:
                             self.sendMessage('create_game/' + gamename.getInput())
                             return
 
-                        self.sendMessage('join_game/' + games[selectedGame][2])
+                        if viewingArchivedGames:
+                            self.sendMessage('join_archived_game/' + games[selectedGame][2])
+                        else:
+                            self.sendMessage('join_game/' + games[selectedGame][2])
                         return
 
             if selectedGame > len(games) and selectedGame != 0:
                 selectedGame = len(games)-1
 
             if time.time() - lastGamesRequest >= 0.5:
-                self.sendMessage('get_games')
+                if viewingArchivedGames: self.sendMessage('get_archived_games')
+                else: self.sendMessage('get_games')
                 lastGamesRequest = time.time()
 
             msg = self.getMessages()
@@ -573,19 +974,31 @@ class Client:
 
             main.sc.fill((128, 128, 128))
 
+            if viewingArchivedGames: t = main.font.render("Archived games: ", True, (153, 0, 0))
+            else: t = main.font.render("Active games: ", True, (0, 128, 0))
+            r = t.get_rect(topleft=(10, 0))
+            main.sc.blit(t, r)
+
             if len(games) > 0:
                 for i in range(len(games)):
-                    t = main.font.render(str(games[i][0]) + '; ' + str(games[i][1]) + ' Players.', True, (0, 0, 0))
+                    if viewingArchivedGames:
+                        t = main.font.render(str(games[i][0]), True, (0, 0, 0))
+                    else:
+                        t = main.font.render(str(games[i][0]) + '; ' + str(games[i][1]) + ' Players.', True, (0, 0, 0))
 
                     if i == selectedGame:
-                        pygame.draw.rect(main.sc, (170, 170, 170), (10, 10+i*56, t.get_width()+40, t.get_height()))
+                        pygame.draw.rect(main.sc, (170, 170, 170), (10, 46+i*56, t.get_width()+40, t.get_height()))
                     else:
-                        pygame.draw.rect(main.sc, (70, 70, 70), (10, 10+i*56, t.get_width()+40, t.get_height()))
+                        pygame.draw.rect(main.sc, (70, 70, 70), (10, 46+i*56, t.get_width()+40, t.get_height()))
 
-                    r = t.get_rect(topleft=(20, 10+i*56))
+                    r = t.get_rect(topleft=(20, 46+i*56))
                     main.sc.blit(t, r)
             else:
-                t = main.font.render("Currently there are no active battles. Why not create one?", True, (0, 0, 0))
+                if viewingArchivedGames:
+                    t = main.font.render("Currently there are no archived battles. Why not create one?",
+                                         True, (0, 0, 0))
+                else:
+                    t = main.font.render("Currently there are no active battles. Why not create one?", True, (0, 0, 0))
                 r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2))
                 main.sc.blit(t, r)
 
@@ -594,8 +1007,8 @@ class Client:
 
     def loadLevel(self):
         print("Loading level")
-        received = False
-        while not received:
+        received = [False, False]
+        while not received == [True, True]:
             self.sendMessage('get_level')
             time.sleep(1 / 10)
             m = self.getMessages()
@@ -604,11 +1017,24 @@ class Client:
                     msg = msg.replace('map', '')
                     try:
                         level = eval(msg)
+                        print(level)
                         for x, y in level:
                             main.map.level[x, y] = Block.getBlockFromID(x, y, level[x, y])
 
-                        received = True
+                        received[0] = True
                         print("Level loaded.")
+                    except Exception as e:
+                        print("Error while trying to load level:", e)
+                        traceback.print_exc()
+                elif 'attributes' in msg:
+                    msg = msg.replace('attributes', '')
+                    try:
+                        attrs = eval(msg)
+
+                        for x, y in attrs:
+                            main.map.level[x, y].attributes = attrs[x, y]
+
+                        received[1] = True
                     except Exception as e:
                         print("Error while trying to load level:", e)
                         traceback.print_exc()
@@ -639,7 +1065,9 @@ class Client:
                     for obj in msg:
                         if obj:
                             s = obj.split('/')
-                            if s[0] == 'yourid':
+                            if s[0] == 'timeofday':
+                                main.timeofday = float(s[1])
+                            elif s[0] == 'yourid':
                                 self.clientId = int(s[1])
 
                             elif s[0] == 'setpos':
@@ -652,7 +1080,14 @@ class Client:
                             elif s[0] == 'p':
                                 players[int(s[1])] = Player(float(s[2]), float(s[3]), s[4], eval(s[5]), int(s[6]))
                             elif s[0] == 'cb':
-                                main.map.level[int(s[1]), int(s[2])] = Block.getBlockFromID(int(s[1]), int(s[2]), s[3])
+                                x, y = int(s[1]), int(s[2])
+                                origb = main.map.level[x, y]
+                                b = Block.getBlockFromID(x, y, s[3],
+                                    eval(s[4]))
+                                b.updateBlock()
+                                main.map.level[x, y] = b
+                                main.map.level[x, y].lightmap = origb.lightmap.copy()
+                                main.map.level[x, y].templightmap = origb.templightmap.copy()
                             elif s[0] == 'o':
                                 main.map.objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
                                 main.map.objects[int(s[1]), int(s[2])].active = eval(s[4])
@@ -708,6 +1143,85 @@ class Client:
         if not self.disconnected:
             self.sendMessage('disconnect')
             self.disconnected = True
+
+
+class ComputerScreen:
+    def __init__(self, sc, x, y):
+        self.sc = sc
+        self.x, self.y = x, y
+
+        self.charWidth, self.charHeight = 6, 9
+        self.screenWidth, self.screenHeight = 24, 4
+        self.prevFrameScreenSize = (24, 4)
+        self.screen = pygame.Surface((24*6, 4*9))
+
+        self.prevFrameScreen = ''
+
+        self.loop()
+
+    def loop(self):
+        while True:
+            main.c.update()
+
+            if type(main.map.level[self.x, self.y]) != Computer:
+                return
+
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    main.c.disconnect()
+                    time.sleep(0.1)
+                    exit(0)
+                elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_ESCAPE:
+                        return
+                    elif e.key not in [pygame.K_TAB, pygame.K_BACKSPACE]:
+                        c = e.unicode
+                        if e.key == pygame.K_RETURN:
+                            c = '\n'
+                        main.c.sendMessage('computer_input' + str(self.x) + '/' + str(self.y) + '/' + c)
+
+            main.renderer.renderGame()
+
+            # self.screen.fill((128, 128, 128))
+            # print(self.computer.attributes['screen'], '\n')
+
+            if 'screen' in main.map.level[self.x, self.y].attributes and \
+               main.map.level[self.x, self.y].attributes['screen'] != self.prevFrameScreen:
+                self.screen.fill((128, 128, 128))
+
+                width, height, screen, background, foreground = main.map.level[self.x, self.y].attributes['screen'].split('-')
+                width, height, screen, background, foreground = int(width), int(height), eval(screen), eval(background), eval(foreground)
+
+                if (width, height) != self.prevFrameScreenSize:
+                    self.screenWidth, self.screenHeight = width, height
+                    self.screen = pygame.Surface((self.screenWidth*self.charWidth, self.screenHeight*self.charHeight))
+
+                for y in range(self.screenHeight):
+                    for x in range(self.screenWidth):
+                        t = main.customfont.render(
+                            screen[y*self.screenWidth+x], True,
+                            foreground[y*self.screenWidth+x], background[y*self.screenWidth+x])
+                        r = t.get_rect(topleft=(x*self.charWidth, y*self.charHeight))
+
+                        pygame.draw.rect(self.screen, background[y*self.screenWidth+x],
+                                         (x*self.charWidth, y*self.charHeight, self.charWidth, self.charHeight))
+                        self.screen.blit(t, r)
+
+            if 'screen' in main.map.level[self.x, self.y].attributes:
+                self.prevFrameScreen = main.map.level[self.x, self.y].attributes['screen']
+            self.prevFrameScreenSize = (self.screenWidth, self.screenHeight)
+
+            # Multipliying screen size by these 2 variables, for screen to fill the whole screen
+            multX, multY = 16, 16
+            while (self.screen.get_width()*multX > SCREEN_W or self.screen.get_height()*multY > SCREEN_H ) and \
+                  0 < multX and 0 < multY:
+                multX -= 1
+                multY -= 1
+            screen = pygame.transform.scale(self.screen, (self.screen.get_width()*multX, self.screen.get_height()*multY))
+
+            self.sc.blit(screen, screen.get_rect(center=(SCREEN_W//2, SCREEN_H//2)))
+
+            pygame.display.update()
 
 
 class ChestMenu:
@@ -879,6 +1393,44 @@ class ChestMenu:
             pygame.display.update()
 
 
+class ShowConnectionError:
+    def __init__(self, error=''):
+        self.msg = error.split('\n')
+
+        self.sc: pygame.Surface
+        self.sc = main.sc
+
+    def display(self):
+        while True:
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    exit()
+                elif e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_r:
+                        main.running = False
+                        self.sc.fill((0, 0, 0))
+                        pygame.display.update()
+                        return
+
+            self.sc.fill((128, 128, 128))
+
+            t = main.font.render("Connection error.", True, (128, 0, 0))
+            r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H*2))
+            self.sc.blit(t, r)
+
+            t = main.font.render("Press R to exit to main menu", True, (0, 0, 128))
+            r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H))
+            self.sc.blit(t, r)
+
+            for line in self.msg:
+                t = main.font.render(line, True, (0, 0, 0))
+                if t.get_width() > SCREEN_W: t = pygame.transform.scale(t, (SCREEN_W, t.get_height()))
+                r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2+self.msg.index(line)*40))
+                self.sc.blit(t, r)
+
+            pygame.display.update()
+
+
 class InputPrompt:
     def __init__(self, message='', default=''):
         self.sc = main.sc
@@ -1042,6 +1594,8 @@ class PauseMenu:
 
     def loop(self):
         while True:
+            main.c.update()
+
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     main.c.disconnect()
@@ -1068,14 +1622,14 @@ class PauseMenu:
 
             x, y = pygame.mouse.get_pos()
             clicked = pygame.mouse.get_pressed(3)
-            # If left mouse button is clicked, then checking if we clicked any of buttons on the screen
+            # If left mouse button is clicked, then checking if user clicked any of buttons on the screen
             if clicked[0]:
                 if self.continuebutton.checkClick(x, y):
                     return
                 elif self.lobbybutton.checkClick(x, y):
                     main.c.disconnect()
-                    main.c = Client(main.serverIp, main.serverPort)
-                    main.c.setNickname(main.nickname)
+                    time.sleep(0.1)
+                    main.setup(nickname=main.nickname)
                     return
                 elif self.exitbutton.checkClick(x, y):
                     main.c.disconnect()
@@ -1098,6 +1652,12 @@ class EventHandler:
                 time.sleep(0.1)
                 exit()
                 return
+
+            # When user resizes the window
+            elif e.type == pygame.VIDEORESIZE:
+                global SCREEN_W, SCREEN_H
+                main.curWidth = e.w
+                main.curHeight = e.h
 
             elif e.type == pygame.KEYDOWN and not main.c.disconnected:
 
@@ -1155,7 +1715,8 @@ class EventHandler:
             # Handling mouse button presses
             elif e.type == pygame.MOUSEBUTTONDOWN and not main.c.disconnected:
                 mouse = pygame.mouse.get_pos()
-                x, y = mouse[0], mouse[1]
+                x, y = int(mouse[0] / (main.curWidth / SCREEN_W)), \
+                       int(mouse[1] / (main.curHeight / SCREEN_H))
 
                 if x < MAP_W * BLOCK_W and y < MAP_H * BLOCK_H:
                     # Drawing little red "cursor" at mouse position
@@ -1225,21 +1786,22 @@ class EventHandler:
 
                                             # Checking if newly placed block won't overlap player's hitbox, so
                                             # player won't get stuck in the block
-                                            main.map.level[resX, resY] = \
+                                            origCollidable = main.map.level[resX, resY].collidable
+                                            main.map.level[resX, resY].collidable = \
                                                 Block.getBlockFromID(resX, resY,
                                                                      main.inventory.inventoryItems[
-                                                                         main.selectedSlot].name)
+                                                                         main.selectedSlot].name, {}).collidable
 
                                             if main.movement.canStepOn(main.pixelx, main.pixely):
                                                 # If everything's alright, placing the block,
                                                 # and decrementing it's count in inventory
                                                 main.map.setBlock(resX, resY,
-                                                                  main.inventory.inventoryItems[main.selectedSlot].name)
+                                                                  main.inventory.inventoryItems[main.selectedSlot].texture)
 
                                                 main.inventory.removeItem(
                                                     Item(main.inventory.inventoryItems[main.selectedSlot].name, '', 1))
                                             else:
-                                                main.map.level[resX, resY] = Block.getBlockFromID(resX, resY, 'grass')
+                                                main.map.level[resX, resY].collidable = origCollidable
 
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_r:
@@ -1250,42 +1812,74 @@ class EventHandler:
         if time.time() - self.lastMovement > 1 / 5 and not main.c.disconnected:  # 1/(blocksPerSecond)
             keys = pygame.key.get_pressed()
 
-            if keys[pygame.K_w]:
-                if main.y > 0:
-                    main.movement.addVelocity(0, -1)
-            if keys[pygame.K_a]:
-                if main.x > 0:
-                    main.movement.addVelocity(-1, 0)
-            if keys[pygame.K_s]:
-                if main.y < MAP_H * BLOCK_H:
-                    main.movement.addVelocity(0, 1)
-            if keys[pygame.K_d]:
-                if main.x < MAP_W * BLOCK_W:
-                    main.movement.addVelocity(1, 0)
+            if keys[pygame.K_w]:    main.movement.addVelocity(0, -1)
+            if keys[pygame.K_a]:    main.movement.addVelocity(-1, 0)
+            if keys[pygame.K_s]:    main.movement.addVelocity(0, 1)
+            if keys[pygame.K_d]:    main.movement.addVelocity(1, 0)
 
 
 class Renderer:
     def __init__(self):
         self.sc: pygame.Surface
-        self.sc = main.sc
+        self.sc = pygame.Surface((SCREEN_W, SCREEN_H))
+
+        self.screen: pygame.Surface
+        self.screen = main.sc
 
         self.mapsc: pygame.Surface
         self.mapsc = main.mapsc
 
-    def renderGame(self):
-        # Drawing water background
-        for x in range(-1, MAP_W+2):
-            for y in range(-1, MAP_H+2):
-                self.sc.blit(main.textures['water'], main.textures['water'].get_rect(topleft=(
-                    x*BLOCK_W-main.pixelx % BLOCK_W,
-                    y*BLOCK_H-main.pixely % BLOCK_H-BLOCK_H//2
-                )))
+        self.lightsc: pygame.Surface
+        self.lightsc = main.lightsc
 
-        # Rendering map
+        self.waterBg = pygame.Surface(((MAP_W+10)*BLOCK_W, (MAP_H+10)*BLOCK_H))
+        for x in range(0, MAP_W+20):
+            for y in range(0, MAP_H+20):
+                self.waterBg.blit(main.textures['water'], main.textures['water'].get_rect(
+                    topleft=(x*BLOCK_W, y*BLOCK_H)))
+
+        self.blackScreen = pygame.Surface((BLOCK_W, BLOCK_H))
+        self.blackScreen.fill((0, 0, 0))
+
+    def renderBlock(self, x, y):
+        if 0 <= x <= MAP_W-1 and 0 <= y <= MAP_H-1:
+            self.mapsc.blit(main.textures['grass'], main.textures['grass'].get_rect(topleft=(x*BLOCK_W, y*BLOCK_H)))
+            main.map.level[x, y].renderBlock(self.mapsc, x*BLOCK_W, y*BLOCK_H)
+
+    def renderMap(self):
         for x in range(MAP_W):
             for y in range(MAP_H):
-                t = main.textures[main.map.level[x, y].texture.split(',')[0]]
-                self.mapsc.blit(t, t.get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
+                self.renderBlock(x, y)
+
+    def renderLightmap(self):
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                pass
+                # main.map.level[x, y].renderLightmap(self.lightsc, x*BLOCK_W, y*BLOCK_H)
+
+    def renderGame(self):
+        blackScreenAlpha = clamp((math.sin(main.timeofday * math.pi)) * 128, 0, 255)
+        self.blackScreen.set_alpha(blackScreenAlpha)
+
+        # Drawing water background
+        coef = clamp(1.5 - clamp(blackScreenAlpha, 0.1, 128) / 128, 0.5, 1)
+        r, g, b = 155*coef, 227*coef, 206*coef
+        # print(r, g, b, coef)
+        self.sc.fill((int(r), int(g), int(b)))
+
+        # Rendering map
+        b: Block
+        for x in range(MAP_W):
+            for y in range(MAP_H):
+                b = main.map.level[x, y]
+
+                self.mapsc.blit(main.textures['grass'], main.textures['grass'].get_rect(topleft=(x * BLOCK_W,
+                                                                                                 y * BLOCK_H)))
+
+                b.lightmap.set_alpha(blackScreenAlpha)
+                b.renderBlock(self.mapsc, x * BLOCK_W, y * BLOCK_H)
+                # t = b.getSurface()
+                # self.mapsc.blit(t, t.get_rect(topleft=(x * BLOCK_W, y * BLOCK_H)))
 
         # Rendering bullets
         for bullet in bullets:
@@ -1315,6 +1909,9 @@ class Renderer:
 
         self.sc.blit(self.mapsc, self.mapsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
                                                               SCREEN_H // 2 - main.pixely)))
+        # self.lightsc.set_alpha(blackScreenAlpha)
+        # self.sc.blit(self.lightsc, self.lightsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
+        #                                                           SCREEN_H // 2 - main.pixely)))
 
         # Rendering "Shadow" under the player to see him easily.
         self.sc.blit(main.textures['arrow'],
@@ -1341,11 +1938,14 @@ class Renderer:
         # Rendering inventory items
         for slot in range(len(main.inventory.inventoryItems)):
             if slot == main.selectedSlot:
-                self.sc.blit(main.textures[main.inventory.inventoryItems[slot].name.split(',')[0]],
-                             main.textures[main.inventory.inventoryItems[slot].name.split(',')[0]].get_rect(
+                t = main.font.render(main.inventory.inventoryItems[slot].name, True, (0, 0, 0))
+                r = t.get_rect(bottomleft=(0, SCREEN_H-BLOCK_H))
+                self.sc.blit(t, r)
+                self.sc.blit(main.textures[main.inventory.inventoryItems[slot].texture.split(',')[0]],
+                             main.textures[main.inventory.inventoryItems[slot].texture.split(',')[0]].get_rect(
                                  topleft=(slot * BLOCK_W, MAP_H * BLOCK_H)))
             else:
-                t = pygame.transform.scale(main.textures[main.inventory.inventoryItems[slot].name.split(',')[0]],
+                t = pygame.transform.scale(main.textures[main.inventory.inventoryItems[slot].texture.split(',')[0]],
                                            (BLOCK_W // 2, BLOCK_H // 2))
                 r = t.get_rect(center=(slot * BLOCK_W + BLOCK_W // 2, MAP_H * BLOCK_H + BLOCK_H // 2))
                 self.sc.blit(t, r)
@@ -1385,6 +1985,10 @@ class Renderer:
             r = t.get_rect(topright=(SCREEN_W, BLOCK_H*2))
             self.sc.blit(t, r)
 
+            t = main.font.render('timeofday: ' + str(round(main.timeofday, 2)), True, (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H*2.5))
+            self.sc.blit(t, r)
+
         # Rendering messages
         message: ChatMessage
         for message in main.messages:
@@ -1407,7 +2011,16 @@ class Renderer:
 
         # Rendering red "cursor" under the actual cursor.
         mouse = pygame.mouse.get_pos()
-        pygame.draw.rect(self.sc, (255, 0, 0), (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
+        x, y = int(mouse[0] / (main.curWidth / SCREEN_W)), \
+               int(mouse[1] / (main.curHeight / SCREEN_H))
+        pygame.draw.rect(self.sc, (255, 0, 0), (x - 10, y - 10, BLOCK_W // 4, BLOCK_H // 4))
+
+        if main.curWidth != SCREEN_W or main.curHeight != SCREEN_H:
+            t = pygame.transform.scale(self.sc, (main.curWidth, main.curHeight))
+        else:
+            t = self.sc
+        r = t.get_rect(topleft=(0, 0))
+        self.screen.blit(t, r)
 
 
 class ClassChooser:
@@ -1465,6 +2078,10 @@ class ClassChooser:
 
         # Giving every player 10 wooden doors just for fun :)
         main.inventory.addInventoryItem(Item('wooden_door_closed', 'wooden_door_closed', 10))
+        main.inventory.addInventoryItem(Item('wirefftt', 'wirefftt', 64))
+        main.inventory.addInventoryItem(Item('lampoff', 'lampoff', 64))
+        main.inventory.addInventoryItem(Item('switchoff', 'switchoff', 64))
+        main.inventory.addInventoryItem(Item('Computer', 'computer', 64))
 
         return PlayerClass(classes[variant][2][0](), classes[variant][1], classes[variant][0])
 
@@ -1477,6 +2094,10 @@ class CollisionDetection:
         self.xvel = 0  # X velocity
         self.yvel = 0  # Y velocity
 
+        # Movement speed ( measures in pixels per second )
+        self.defaultMovementSpeed = 0.7 * BLOCK_W
+        self.__currentMovementSpeed = self.defaultMovementSpeed
+
     def addVelocity(self, x=0, y=0):
         self.xvel += x
         self.yvel += y
@@ -1484,27 +2105,56 @@ class CollisionDetection:
     def update(self):
         # print(self.xvel, self.yvel, end=' ')
 
+        delta = main.getDeltaTime()
+
         self.xvel = self.clamp(self.xvel, -2, 2)
         self.yvel = self.clamp(self.yvel, -2, 2)
 
         # print(self.xvel, self.yvel)
 
-        if self.canStepOn(self.x + self.xvel, self.y):
-            self.x += self.xvel
-        if self.canStepOn(self.x, self.y + self.yvel):
-            self.y += self.yvel
-        if self.canStepOn(self.x + self.xvel, self.y + self.yvel):
-            self.x += self.xvel
-            self.y += self.yvel
+        movX = self.xvel * delta * self.defaultMovementSpeed
+        movY = self.yvel * delta * self.defaultMovementSpeed
+
+        futureX = self.clamp(self.x + (movX * self.getMovementSpeed(self.x+movX, self.y+movY)), 0, (MAP_W-0.5) * BLOCK_W)
+        futureY = self.clamp(self.y + (movY * self.getMovementSpeed(self.x+movY, self.y+movY)), 0, (MAP_H-0.5) * BLOCK_H)
+
+        canstep = False
+        if self.canStepOn(futureX, self.y):
+            self.x = futureX
+            canstep = True
+        if self.canStepOn(self.x, futureY):
+            self.y = futureY
+            canstep = True
+
+        if not canstep and self.canStepOn(futureX, futureY):
+            self.x, self.y = futureX, futureY
 
         self.xvel *= 0.9
         self.yvel *= 0.9
 
-        if -0.01 <= self.xvel <= 0.01: self.xvel = 0
-        if -0.01 <= self.yvel <= 0.01: self.yvel = 0
+        # if -0.01 <= self.xvel <= 0.01: self.xvel = 0
+        # if -0.01 <= self.yvel <= 0.01: self.yvel = 0
 
-        self.x = self.clamp(self.x, 0, (MAP_W - 0.5) * BLOCK_W)
-        self.y = self.clamp(self.y, 0, (MAP_H - 0.5) * BLOCK_H)
+        self.x = self.clamp(self.x, 0, (MAP_W-0.5) * BLOCK_W)
+        self.y = self.clamp(self.y, 0, (MAP_H-0.5) * BLOCK_H)
+
+    def getMovementSpeed(self, x, y) -> float:
+        points = [
+            (x - BLOCK_W / 2.5, y - BLOCK_H / 2.5),  # Upleft
+            (x + BLOCK_W / 2.5, y - BLOCK_H / 2.5),  # Upright
+            (x - BLOCK_W / 2.5, y + BLOCK_H / 2.5),  # Downleft
+            (x + BLOCK_W / 2.5, y + BLOCK_H / 2.5)  # Downright
+        ]
+
+        movementSpeeds = []
+        for point in points:
+            if 0 <= point[0] < MAP_W*BLOCK_W and 0 <= point[1] < MAP_H*BLOCK_H:
+                movementSpeeds.append(main.map.level[
+                                          int(point[0] / BLOCK_W), int(point[1] / BLOCK_H)].movementSpeedMultiplier)
+
+        if len(movementSpeeds) == 0: movementSpeeds = [1]
+        # print(movementSpeeds)
+        return min(movementSpeeds)
 
     def getPos(self) -> (int, int):
         return self.x, self.y
@@ -1548,14 +2198,33 @@ class CollisionDetection:
             (x + BLOCK_W / 2.5, y + BLOCK_H / 2.5)  # Downright
         ]
 
+        canStep = True
         for point in points:
             if 0 <= point[0] <= MAP_W * BLOCK_W and 0 <= point[1] <= MAP_H * BLOCK_H:
                 if main.map.level[int(point[0] / BLOCK_W), int(point[1] / BLOCK_H)].collidable:
                     return False
-            else:
-                return False
+            else: return False
 
         return True
+
+
+class TextureManager:
+    def __init__(self, path: str):
+        files = os.listdir(path)
+        self.__textures = {}
+        for filename in files:
+            self.__textures[filename.replace('.png', '')] = \
+                pygame.transform.scale(pygame.image.load('textures/' + filename).convert_alpha(), (BLOCK_W, BLOCK_H))
+
+        self.__errortexture = pygame.Surface((BLOCK_W, BLOCK_H))
+        self.__errortexture.fill((255, 0, 255))
+
+    def __getitem__(self, item: str):
+        if item in self.__textures:
+            return self.__textures[item]
+        else:
+            print("Unknown texture:", item)
+            return self.__errortexture
 
 
 class Main:
@@ -1575,10 +2244,8 @@ class Main:
             exit(1)
 
     def loadTextures(self):
-        files = os.listdir('textures/')
-        self.textures = {}
-        for filename in files:
-            self.textures[filename.replace('.png', '')] = pygame.image.load('textures/' + filename).convert_alpha()
+        self.textures = TextureManager('textures/')
+        print(self.textures['hello'])
 
     def loadSounds(self):
         files = os.listdir('sounds/')
@@ -1590,32 +2257,47 @@ class Main:
                 self.sounds[filename.split('.')[0]] = SoundStub()
 
     def __init__(self, surface):
+        self.initialized = False
+
         global main
         main = self
 
         pygame.init()
         self.fullscreen = False
 
+        self.curWidth = SCREEN_W
+        self.curHeight = SCREEN_H
+
         self.sc = surface
         self.mapsc = pygame.Surface((MAP_W*BLOCK_W, MAP_H*BLOCK_H))
+        self.lightsc = pygame.Surface((MAP_W*BLOCK_W, MAP_H*BLOCK_H))
         pygame.display.set_caption("BattleKiller 2D " + GAME_VERSION)
 
         self.setup()
 
-    def setup(self):
+    def getDeltaTime(self):
+        return self.__deltaTime
+
+    def setup(self, playerClass=None, nickname=None):
         self.loadConfig()
 
         self.loadTextures()
         self.loadSounds()
 
         self.font = pygame.font.SysFont("Arial", 36)
+        self.customfont = CustomFont()
 
         self.map = MapManager()
         self.inventory = Inventory()
 
-        self.chooser = ClassChooser()
-        self.playerClass: PlayerClass
-        self.playerClass = self.chooser.classChooser()
+        if playerClass is None:
+            self.chooser = ClassChooser()
+            self.playerClass: PlayerClass
+            self.playerClass = self.chooser.classChooser()
+        else:
+            self.chooser = ClassChooser()
+            self.playerClass: PlayerClass
+            self.playerClass = playerClass
 
         self.eventhandler = EventHandler()
         self.renderer = Renderer()
@@ -1632,12 +2314,20 @@ class Main:
 
         # Asking player's nickname
         self.nicknamePrompt = InputPrompt('Please enter your nickname')
-        self.nicknamePrompt.show()
-        self.nickname = self.nicknamePrompt.getInput()
+        if nickname is None:
+            self.nicknamePrompt.show()
+            self.nickname = self.nicknamePrompt.getInput()
+        else:
+            self.nickname = nickname
+
+        self.lightProcessor = LightProcessor()
 
         # Connecting to the server
         self.c = Client(self.serverIp, self.serverPort)
         self.c.setNickname(self.nickname)
+
+        # 0 is day, 0.5 is night, 1 is again day
+        self.timeofday = 0
 
         # Currently selected inventory slot
         self.selectedSlot = 0
@@ -1646,25 +2336,37 @@ class Main:
         self.messages = []
 
         # For fps displaying
-        self.prevFrame = time.time()
+        self.prevFpsCheck = time.time()
         self.fps = 0
         self.__frames = 0
+
+        # For light optimization
+        self.mustCalcLight = True
+
+        # For fps-independent movement ( movement speed will be the same with low or high fps )
+        self.prevFrame = time.time()
+        self.__deltaTime = 0
 
         self.displayingDebugInfo = False
 
         self.defenceLevel = 0
 
+        self.initialized = True
+
     def mainLoop(self):
         global RECONNECTING
 
         try:
+            # Updating all map
+            self.map.updateMap()
+            self.lightProcessor.calcLight(force=True)
             self.c.sendMessage('get_objects')
         except:
             pass
 
         while self.running:
             self.pixelx, self.pixely = self.movement.getPos()
-            x, y = int(self.pixelx // BLOCK_W), int(self.pixely // BLOCK_H)
+            x, y = int(self.pixelx / BLOCK_W), int(self.pixely / BLOCK_H)
             self.x, self.y = x, y
 
             # listening for the events
@@ -1681,6 +2383,7 @@ class Main:
                 )
 
                 self.c.update()
+                self.map.updateMap()
 
                 if self.c.newMessages:
                     for msg in self.c.newMessages:
@@ -1691,6 +2394,7 @@ class Main:
                     self.c.newMessages.clear()
 
                 if health > 0:
+                    self.lightProcessor.calcLight()
                     self.renderer.renderGame()
                 else:
                     self.c.disconnect()
@@ -1708,22 +2412,28 @@ class Main:
 
             pygame.display.update()
 
-            v = 1 / 160
+            # v = 1 / 160
             # print(v)
-            if v > 0:
-                time.sleep(v)
+            # if v > 0:
+            #     time.sleep(v)
 
-            if time.time() - self.prevFrame >= 1:
+            if time.time() - self.prevFpsCheck >= 1:
                 self.fps = self.__frames
                 self.__frames = 0
-                self.prevFrame = time.time()
+                self.prevFpsCheck = time.time()
 
             self.__frames += 1
+
+            self.__deltaTime = time.time() - self.prevFrame
+            self.prevFrame = time.time()
 
 
 class StartMenu:
     def __init__(self):
-        self.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+        self.blitsc = pygame.Surface((SCREEN_W, SCREEN_H))
+        self.origsc = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.RESIZABLE)
+
+        self.curWidth, self.curHeight = SCREEN_W, SCREEN_H
 
         # loading button's textures
         self.playButton = pygame.image.load('textures/play_button.png').convert_alpha()
@@ -1744,6 +2454,11 @@ class StartMenu:
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     exit()
+
+                elif e.type == pygame.VIDEORESIZE:
+                    self.curWidth = e.w
+                    self.curHeight = e.h
+
                 elif e.type == pygame.MOUSEBUTTONDOWN:
                     x, y = e.pos
 
@@ -1751,20 +2466,30 @@ class StartMenu:
                     if self.playButtonCoords[0] <= x <= self.playButtonCoords[0] + self.playButton.get_width() and \
                             self.playButtonCoords[1] <= y <= self.playButtonCoords[1] + self.playButton.get_height():
                         resetGlobals()
-                        main = Main(self.sc)
+                        main = Main(self.origsc)
+                        main.curWidth, main.curHeight = self.curWidth, self.curHeight
                         main.mainLoop()
                         resetGlobals()
                     elif self.exitButtonCoords[0] <= x <= self.exitButtonCoords[0] + self.exitButton.get_width() and \
                             self.exitButtonCoords[1] <= y <= self.exitButtonCoords[1] + self.exitButton.get_height():
                         exit()
 
-            self.sc.fill((0, 76, 153))
+            self.blitsc.fill((0, 76, 153))
 
-            self.sc.blit(self.playButton,
-                         self.playButton.get_rect(topleft=self.playButtonCoords))
+            self.blitsc.blit(self.playButton,
+                             self.playButton.get_rect(topleft=self.playButtonCoords))
 
-            self.sc.blit(self.exitButton,
-                         self.exitButton.get_rect(topleft=self.exitButtonCoords))
+            self.blitsc.blit(self.exitButton,
+                             self.exitButton.get_rect(topleft=self.exitButtonCoords))
+
+            if self.curWidth != SCREEN_W or self.curHeight != SCREEN_H:
+                t = pygame.transform.scale(self.blitsc, (self.curWidth, self.curHeight))
+                r = t.get_rect(topleft=(0, 0))
+            else:
+                t = self.blitsc
+                r = t.get_rect(topleft=(0, 0))
+
+            self.origsc.blit(t, r)
 
             pygame.display.update()
 
@@ -1774,10 +2499,10 @@ GAME_VERSION = 'version UNDEFINED'
 RECONNECTING = False
 
 players = {}
-players: {int: Player}
+#
 
 bullets = []
-bullets: [Bullet]
+# bullets: [Bullet]
 
 nextFrameUpdate = False
 

@@ -1,6 +1,4 @@
 Traceback (most recent call last):
-  File "C:\Users\Zakhar\Desktop\progs\BattleKiller2D\main.py", line 461, in __init__
-    self.lobbyMenu()
-  File "C:\Users\Zakhar\Desktop\progs\BattleKiller2D\main.py", line 511, in lobbyMenu
-    self.sendMessage('join_game/' + games[selectedGame][2])
-IndexError: list index out of range
+  File "C:\projects\BattleKiller2D\main.py", line 877, in __init__
+    self.s.connect((sip, sport))
+ConnectionRefusedError: [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
