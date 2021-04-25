@@ -1,0 +1,3 @@
+Traceback (most recent call last):
+  File "main.py", line 902, in __init__
+ConnectionRefusedError: [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
