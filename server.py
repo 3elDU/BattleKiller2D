@@ -571,6 +571,7 @@ class Game:
         self.timeofday = 0
 
         # Generating level
+        self.changedBlocks = []
         print("Initializing level for game", self.getGameIDString())
         self.level = Level(self)
         if level is not None:
@@ -612,7 +613,6 @@ class Game:
         self.objects = {}
         self.objects: {(int, int): Object}
 
-        self.changedBlocks = []
         self.changedObjects = []
         self.newMessages = []
 
@@ -670,14 +670,18 @@ class Game:
 
     def handleCommand(self, command: str) -> str:
         try:
+            command = command.lower()
             cmd = command.split(' ')
-            if cmd[0] == 'kick':
+            if cmd[0] == '/kick':
                 client: Client
                 for client in self.players:
                     if client.clientID == int(cmd[1]):
                         client.disconnect(reason=''.join([s + ' ' for s in cmd[2::]]))
                         return 'Successfully kicked player #' + str(cmd[1])
                 return 'No player found with id #' + str(cmd[1])
+            elif cmd[0] == '/spawnchest':
+                self.level.createChest(int(cmd[1]), int(cmd[2]))
+                return 'Successfully generated loot chest at ' + cmd[1] + ', ' + cmd[2]
             else:
                 return 'Unknown command.'
         except Exception as e:
@@ -728,10 +732,14 @@ class Game:
             print(command)
             response = self.handleCommand(command[1])
             print(response)
+            self.players[command[0]].sendMessage(str(response))
+
+            """
             for client in self.players:
                 if client.clientID == command[0]:
                     print(client.clientID)
                     client.serviceMessages.append(response)
+            """
         self.commandsFromClients.clear()
 
     def __updateBullets(self):
@@ -908,15 +916,15 @@ class Client:
 
     def __handleMessages(self) -> None:
         try:
+            message: str
             # if self.__messagesFromClient: print(self.__messagesFromClient)
             for message in self.__messagesFromClient:
                 if message == 'alive':
                     self.lastAliveMessage = time.time()
 
-                elif '/command' in message:
-                    print(self.game.getGameIDString(), "Command from ", self.getNickname(), message)
-                    cmd = message.replace('/command ', '')
-                    self.game.commandsFromClients.append([self.clientID, cmd])
+                elif message.startswith('/'):
+                    print(self.game.getGameIDString(), "Command from", self.getNickname(), ":", message)
+                    self.game.commandsFromClients.append([self.clientID, message])
 
                 elif message == 'disconnect':
                     self.game.whenLastPlayerJoined = time.time()
@@ -937,10 +945,12 @@ class Client:
                             
 
                     s = 'map' + m
-                    print(self.game.level.level)
-                    print(s)
+                    # print(self.game.level.level)
+                    # print(s)
                     self.dataToSend.append(s)
                 elif message == 'get_level':
+                    # print(self.game.level.level)
+                    # print(self.game.level.attributes)
                     print(self.game.getGameIDString(), self.getNickname(), "loaded the map.")
                     self.dataToSend.append('map' + str(self.game.level.level))
                     self.dataToSend.append('attributes' + str(self.game.level.attributes))
@@ -971,8 +981,9 @@ class Client:
                     # print(self.changedBlocks)
                     for block in range(len(self.changedBlocks)):
                         x, y = self.changedBlocks[block]
-                        m += 'cb/' + str(x) + '/' + str(y) + '/' + self.game.level.level[x, y] + '/' + \
+                        m += 'cb/' + str(x) + '/' + str(y) + '/' + str(self.game.level.level[x, y]) + '/' + \
                              str(self.game.level.attributes[x, y]) + ';'
+                        # print(m)
 
                     for b in self.changedObjects:
                         m += 'o/' + str(b[0]) + '/' + str(b[1]) + '/' + str(b[2]) + '/' + str(b[3]) + ';'
@@ -1314,8 +1325,8 @@ class Level:
             b = 'wall'
         if r == 1:
             b = 'tree'
-        if r == 2 and random.randint(0, 3) == 0:
-            b = self.createChest(x, y)
+        # if r == 2 and random.randint(0, 3) == 0:
+        #     b = self.createChest(x, y)
         if r == 3 and random.randint(0, 3) == 0:
             b = 'heart'
         self.level[x, y] = b
@@ -1330,7 +1341,6 @@ class Level:
         for x in range(MAP_W):
             for y in range(MAP_H):
                 self.generateBlock(x, y)
-        self.level[0, 0] = 'grass'
 
         gen_end = time.time()
 
@@ -1344,13 +1354,12 @@ class Level:
                     lootTable=None, maxItems=8) -> str:
         if lootTable is None:
             # First is item itself, second is max possible items that can be generated,
-            # third is spawn chance ( from 0 to 1 )
+            # third is spawn chance ( from 0 to 100 )
             lootTable = [
                 ['pickaxe', 1, 5],
-                ['hammer', 1, 15],
                 ['magic_stick', 1, 10],
                 ['candle', 1, 25],
-                ['sniper_rifle', 1, 0.025],
+                ['sniper_rifle', 1, 100],
                 ['knife', 1, 0.5],
                 ['wood', 15, 100],
                 ['planks', 50, 30],
@@ -1358,7 +1367,7 @@ class Level:
                 ['tree', 15, 100]
             ]
 
-        m = 'chest'
+        m = []
         for item in range(random.randint(1, maxItems // 2) * 2):
             created = False
 
@@ -1370,15 +1379,17 @@ class Level:
                     itemName = item[0]
                     itemCount = random.randint(1, item[1])
 
-                    m += ',' + itemName + '=' + str(itemCount)
+                    m.append([itemName, itemCount])
 
                     created = True
 
         # print(m)
 
-        self.level[x, y] = m
-        if self.__generated:
-            self.game.changedBlocks.append([x, y])
+        self.level[x, y] = 'chest'
+        self.attributes[x, y] = {'items':m}
+
+        print(self.level[x, y], self.attributes[x, y])
+        self.game.changedBlocks.append([x, y])
 
         return m
 
