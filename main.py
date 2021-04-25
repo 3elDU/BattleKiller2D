@@ -923,7 +923,7 @@ class Client:
             self.connectionError = True
             self.disconnectReason = 'Error:\n' + err
 
-            errorscreen = ShowConnectionError(self.disconnectReason)
+            errorscreen = ShowErrorMessage(self.disconnectReason)
             errorscreen.display()
 
         self.newMessages = []
@@ -1031,33 +1031,51 @@ class Client:
     def loadLevel(self):
         print("Loading level")
         received = [False, False]
+        start = time.time()
         while not received == [True, True]:
-            self.sendMessage('get_level')
-            time.sleep(1 / 10)
-            m = self.getMessages()
-            for msg in m:
-                if 'map' in msg:
-                    msg = msg.replace('map', '')
-                    try:
+            if time.time()-start >= 10:
+                s = ShowErrorMessage('Level is loading for too long\n'
+                                     'Something is definetely not right,\n'
+                                     'or you just have shitty internet.',
+                                     title='Level loading took too long')
+                s.display()
+                return
+
+            try:
+                self.sendMessage('get_level')
+                time.sleep(1 / 10)
+                m = self.getMessages()
+                for msg in m:
+                    if 'map' in msg:
+                        msg = msg.replace('map', '')
                         level = eval(msg)
 
                         received[0] = True
-                        print("Level loaded.")
-                    except Exception as e:
-                        print("Error while trying to load level:", e)
                         traceback.print_exc()
-                elif 'attributes' in msg:
-                    msg = msg.replace('attributes', '')
-                    try:
+                    elif 'attributes' in msg:
+                        msg = msg.replace('attributes', '')
                         attrs = eval(msg)
 
                         received[1] = True
-                    except Exception as e:
-                        print("Error while trying to load level:", e)
                         traceback.print_exc()
+            except:
+                f = open('last_err_code.txt', 'w')
+                traceback.print_exc(file=f)
+                f.close()
+
+                f = open('last_err_code.txt', 'r')
+                err = f.read()
+                f.close()
+
+                s = ShowErrorMessage('Unable to load level. \nSomething is definetely not right.\n'
+                                     "Or you just have shitty internet. \nHere's the error message:\n" + err,
+                                     title='Level loading error.')
+                s.display()
+                return
 
         for x, y in level:
             main.map.level[x, y] = Block.getBlockFromID(x, y, level[x, y], attributes=attrs[x, y])
+        print("Level loaded in", round(time.time()-start, 2), "seconds.")
 
     def setNickname(self, nickname: str):
         self.sendMessage('set_nick/' + str(nickname))
@@ -1401,9 +1419,10 @@ class ChestMenu:
             pygame.display.update()
 
 
-class ShowConnectionError:
-    def __init__(self, error=''):
+class ShowErrorMessage:
+    def __init__(self, error='', title='connection error.'):
         self.msg = error.split('\n')
+        self.title = title
 
         self.sc: pygame.Surface
         self.sc = main.sc
@@ -1416,24 +1435,24 @@ class ShowConnectionError:
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_r:
                         main.running = False
-                        self.sc.fill((0, 0, 0))
+                        self.sc.fill((128,128,128))
                         pygame.display.update()
                         return
 
             self.sc.fill((128, 128, 128))
 
-            t = main.font.render("Connection error.", True, (128, 0, 0))
-            r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H*2))
+            t = main.font.render(self.title, True, (128, 0, 0))
+            r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H*2.5))
             self.sc.blit(t, r)
 
             t = main.font.render("Press R to exit to main menu", True, (0, 0, 128))
-            r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H))
+            r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2-BLOCK_H*2))
             self.sc.blit(t, r)
 
             for line in self.msg:
                 t = main.font.render(line, True, (0, 0, 0))
                 if t.get_width() > SCREEN_W: t = pygame.transform.scale(t, (SCREEN_W, t.get_height()))
-                r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2+self.msg.index(line)*40))
+                r = t.get_rect(center=(SCREEN_W//2, SCREEN_H//2+self.msg.index(line)*40-BLOCK_H))
                 self.sc.blit(t, r)
 
             pygame.display.update()
