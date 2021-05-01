@@ -338,8 +338,8 @@ class Block:
         self.lightmap = pygame.Surface((main.lightProcessor.lightMapResolution,
                                         main.lightProcessor.lightMapResolution))
         self.lightmap.fill((0, 0, 0))
-        self.lightmap.set_colorkey((255, 255, 0))
-        self.lightmap.set_alpha(128)
+        # self.lightmap.set_colorkey((255, 255, 0))
+        # self.lightmap.set_alpha(128)
 
         self.templightmap = pygame.Surface((main.lightProcessor.lightMapResolution,
                                             main.lightProcessor.lightMapResolution))
@@ -446,7 +446,8 @@ class Wire(Block):
         self.energy = self.attributes['energy']
 
     def breakBlock(self) -> None:
-        main.inventory.addInventoryItem(Item('wiretttt', 'wiretttt', 1, False))
+        self.replaceWith(Block.getBlockFromID(self.x, self.y, 'grass'))
+        main.inventory.addInventoryItem(Item('Wire', 'wirefftt', 1, False))
 
     def interact(self):
         # self.attributes['energy_source'] = (self.x, self.y)
@@ -1866,6 +1867,8 @@ class Renderer:
 
         self.lightsc: pygame.Surface
         self.lightsc = pygame.Surface((MAP_W*BLOCK_W, MAP_H*BLOCK_H))
+        self.lightsc.set_alpha(128)
+        self.lightsc.set_colorkey((255, 255, 0))
 
         self.waterBg = pygame.Surface(((MAP_W+10)*BLOCK_W, (MAP_H+10)*BLOCK_H))
         for x in range(0, MAP_W+20):
@@ -1893,10 +1896,11 @@ class Renderer:
                 self.renderBlock(x, y)
 
     def renderLightmap(self):
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                pass
-                # main.map.level[x, y].renderLightmap(self.lightsc, x*BLOCK_W, y*BLOCK_H)
+        return
+
+        # for x in range(MAP_W):
+        #     for y in range(MAP_H):
+        #         main.map.level[x, y].renderLightmap(self.lightsc, x*BLOCK_W, y*BLOCK_H)
 
     def renderGame(self):
         self.blackScreenAlpha = clamp((math.sin(main.timeofday * math.pi)) * 128, 0, 255)
@@ -1956,6 +1960,9 @@ class Renderer:
 
         self.sc.blit(self.objsc, self.objsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
                                                               SCREEN_H // 2 - main.pixely)))
+
+        # self.sc.blit(self.lightsc, self.lightsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
+        #                                                           SCREEN_H // 2 - main.pixely)))
 
         # self.lightsc.set_alpha(blackScreenAlpha)
         # self.sc.blit(self.lightsc, self.lightsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
@@ -2433,7 +2440,7 @@ class Main:
                 self.c.newMessages.clear()
 
             if health > 0:
-                self.lightProcessor.calcLight()
+                # self.lightProcessor.calcLight()
                 self.renderer.renderGame()
             else:
                 self.c.disconnect()
@@ -2469,7 +2476,7 @@ class Main:
             # Updating all map
             self.map.updateMap()
             self.renderer.renderMap()
-            self.lightProcessor.calcLight(force=True)
+            # self.lightProcessor.calcLight(force=True)
             self.c.sendMessage('get_objects')
         except:
             pass
