@@ -366,8 +366,9 @@ class Block:
 
     def breakBlock(self) -> bool:
         if self.breakable:
+            main.inventory.addInventoryItem(Item(name=self.name, texture=self.texture, count=1, specialItem=False,
+                                                 attributes=self.attributes))
             self.replaceWith(Block.getBlockFromID(self.x, self.y, 'grass'))
-            main.inventory.addInventoryItem(Item(self.name, self.texture, 1, False))
             return True
         return False
 
@@ -417,6 +418,11 @@ class Chest(Block):
 
         print(self.items, self.texture)
 
+    def breakBlock(self) -> bool:
+        main.inventory.addInventoryItem(Item('Chest', 'chest', 1, False, True, {'items': []}))
+        self.replaceWith(Block.getBlockFromID(self.x, self.y, 'grass'))
+        return True
+
     def interact(self):
         ChestMenu(main.sc, self.items, self.x, self.y)
 
@@ -447,7 +453,8 @@ class Wire(Block):
 
     def breakBlock(self) -> None:
         self.replaceWith(Block.getBlockFromID(self.x, self.y, 'grass'))
-        main.inventory.addInventoryItem(Item('Wire', 'wirefftt', 1, False))
+        main.inventory.addInventoryItem(Item('Wire', 'wirefftt', 1, False,
+                                             attributes={'electrical': True, 'energy': 0, 'rotation': 'ffff'}))
 
     def interact(self):
         # self.attributes['energy_source'] = (self.x, self.y)
@@ -564,9 +571,14 @@ class Bullet:
 
 
 class Item:
-    def __init__(self, name, texture, count, specialItem=False):
+    def __init__(self, name, texture, count, specialItem=False, stackable=True, attributes=None):
         self.name, self.texture, self.count = name, texture, count
+        self.stackable = stackable
         self.specialItem = specialItem
+
+        if attributes is None:
+            self.attributes = {}
+        else: self.attributes = attributes
 
     @staticmethod
     def interactWithBlock(x, y):
@@ -794,7 +806,7 @@ class Inventory:
     def addInventoryItem(self, item: Item):
         i: Item
         for i in self.inventoryItems:
-            if i.name == item.name or i.texture == item.name:
+            if i.name == item.name or i.texture == item.name and i.attributes == item.attributes and i.stackable:
                 i.count += item.count
                 return
 
@@ -805,7 +817,7 @@ class Inventory:
 
         i: Item
         for i in self.inventoryItems:
-            if i.name == item.name and i.count >= item.count:
+            if i.name == item.name and i.count >= item.count and item.attributes == i.attributes:
                 i.count -= item.count
 
                 if i.count == 0:
@@ -817,7 +829,7 @@ class Inventory:
 
     def removeItemByName(self, name: str, count: int):
         for i in self.inventoryItems:
-            if i.name == name and i.count >= count:
+            if i.name == name and i.count >= count and i.count >= item.count and (item.attributes == i.attributes):
                 i.count -= count
 
             if i.count <= 0:
@@ -832,7 +844,7 @@ class Inventory:
 
         i: Item
         for i in self.inventoryItems:
-            if i.name == name:
+            if i.name == name or i.texture == name:
                 return True
 
         return False
@@ -1736,7 +1748,7 @@ class EventHandler:
                         main.sc = pygame.display.set_mode((SCREEN_W, SCREEN_H))
                 """
 
-                # Reconnecting if you user is disconnected from the server ( kicked for example ) and presses R key
+                # Reconnecting if you are disconnected from the server ( kicked for example ) and press R key
                 if e.key == pygame.K_r and main.c.disconnected:
                     global RECONNECTING
                     RECONNECTING = True
@@ -1812,24 +1824,32 @@ class EventHandler:
 
                                         # We will place the block only on grass, we won't replace other blocks
                                         if main.map.level[resX, resY].texture == 'grass' and \
-                                                main.inventory.inventoryItems[main.selectedSlot].count > 0:
+                                           main.inventory.inventoryItems[main.selectedSlot].count > 0:
 
                                             # Checking if newly placed block won't overlap player's hitbox, so
                                             # player won't get stuck in the block
                                             origCollidable = main.map.level[resX, resY].collidable
                                             main.map.level[resX, resY].collidable = \
-                                                Block.getBlockFromID(resX, resY,
-                                                                     main.inventory.inventoryItems[
-                                                                         main.selectedSlot].name, {}).collidable
+                                                Block.getBlockFromID(
+                                                    resX, resY,
+                                                    main.inventory.inventoryItems[main.selectedSlot].texture,
+                                                    main.inventory.inventoryItems[main.selectedSlot].attributes
+                                                ).collidable
 
                                             if main.movement.canStepOn(main.pixelx, main.pixely):
                                                 # If everything's alright, placing the block,
                                                 # and decrementing it's count in inventory
-                                                main.map.setBlock(resX, resY,
-                                                                  main.inventory.inventoryItems[main.selectedSlot].texture)
+                                                main.map.setBlock(
+                                                    resX, resY,
+                                                    Block.getBlockFromID(resX, resY,
+                                                                         main.inventory.inventoryItems[main.selectedSlot].texture,
+                                                                         main.inventory.inventoryItems[main.selectedSlot].attributes)
+                                                )
 
                                                 main.inventory.removeItem(
-                                                    Item(main.inventory.inventoryItems[main.selectedSlot].name, '', 1))
+                                                    Item(main.inventory.inventoryItems[main.selectedSlot].name,
+                                                         main.inventory.inventoryItems[main.selectedSlot].texture, 1,
+                                                         attributes=main.inventory.inventoryItems[main.selectedSlot].attributes))
                                             else:
                                                 main.map.level[resX, resY].collidable = origCollidable
 
@@ -2042,6 +2062,20 @@ class Renderer:
 
             t = main.font.render('timeofday: ' + str(round(main.timeofday, 2)), True, (0, 0, 0))
             r = t.get_rect(topright=(SCREEN_W, BLOCK_H*2.5))
+            self.sc.blit(t, r)
+
+            t = main.font.render('name ' + str(main.inventory.inventoryItems[main.selectedSlot].name), True, (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H*3))
+            self.sc.blit(t, r)
+
+            t = main.font.render('texture ' + str(main.inventory.inventoryItems[main.selectedSlot].texture), True,
+                                 (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H*3.5))
+            self.sc.blit(t, r)
+
+            t = main.font.render('attrs ' + str(main.inventory.inventoryItems[main.selectedSlot].attributes), True,
+                                 (0, 0, 0))
+            r = t.get_rect(topright=(SCREEN_W, BLOCK_H * 4))
             self.sc.blit(t, r)
 
         # Rendering messages
