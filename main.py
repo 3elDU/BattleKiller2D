@@ -13,6 +13,9 @@ BLOCK_H = 80
 MAP_W = 16
 MAP_H = 8
 
+LEVEL_W = 1025
+LEVEL_H = 1025
+
 SCREEN_W = MAP_W * BLOCK_W
 SCREEN_H = (MAP_H + 1) * BLOCK_H
 
@@ -84,9 +87,9 @@ class CustomFont:
                 # Generating background color that willn't match text color and foreground color
                 bg = self.__notEqualColor(foreground)
 
-                image = self.__image_at((x * 5, y * 8, 5, 8), bg=bg)
-                self.__replaceColor(image, (0, 0, 0), foreground)
-                self.__replaceColor(image, bg, background)
+                image = self.__image_at((x * 5, y * 8, 5, 8), colorkey=(255, 255, 255))
+                # self.__replaceColor(image, (0, 0, 0), foreground)
+                # self.__replaceColor(image, bg, background)
             else:
                 image = self.__arial.render(char.upper(), False, foreground, background)
 
@@ -271,6 +274,10 @@ class Block:
         try:
             if blockID == 'wall':
                 return StoneWall(x, y)
+            elif blockID == 'spawnpoint':
+                return Spawnpoint(x, y)
+            elif blockID == 'barrier':
+                return Barrier(x, y)
             elif blockID == 'tree':
                 return Block(x, y, collidable=False, transparentForLight=True, movementSpeedMultiplier=0.5,
                              name='Tree', texture='tree')
@@ -311,6 +318,13 @@ class Block:
         else:
             return ''
 
+    def __eq__(self, other):
+        return self.attributes == other.attributes and self.texture == other.texture and \
+               self.name == other.name and self.collidable == other.collidable and \
+               self.x == other.x and self.y == other.y and self.breakable == other.breakable and \
+               self.visible == other.visible and self.emittingLight == other.emittingLight and \
+               self.transparentForLight == other.transparentForLight
+
     def __init__(self, x, y, collidable=True, breakable=True, visible=True,
                  emittingLight=False, transparentForLight = False,
                  texture='wall', name='Stone wall',
@@ -348,10 +362,10 @@ class Block:
         self.x, self.y = x, y
 
     def renderBlock(self, dest: pygame.Surface, topleftx: int, toplefty: int):
-        dest.blit(main.textures['grass'], main.textures['grass'].get_rect(topleft=(topleftx, toplefty)))
+        dest.blit(main.textures16['grass'], main.textures16['grass'].get_rect(topleft=(topleftx, toplefty)))
 
-        dest.blit(main.textures[self.texture.split(',')[0]],
-                  main.textures[self.texture.split(',')[0]].get_rect(topleft=(topleftx, toplefty)))
+        dest.blit(main.textures16[self.texture.split(',')[0]],
+                  main.textures16[self.texture.split(',')[0]].get_rect(topleft=(topleftx, toplefty)))
 
     def renderLightmap(self, dest: pygame.Surface, topleftx: int, toplefty: int):
         t = pygame.transform.scale(self.lightmap, (BLOCK_W, BLOCK_H))
@@ -377,6 +391,18 @@ class Block:
 
     def replaceWith(self, block) -> None:
         main.map.setBlock(self.x, self.y, block)
+
+
+class Spawnpoint(Block):
+    def __init__(self, x, y):
+        Block.__init__(self, x, y, collidable=False, breakable=False,
+                       texture='spawnpoint', name='Spawnpoint flag')
+
+
+class Barrier(Block):
+    def __init__(self, x, y):
+        Block.__init__(self, x, y, collidable=True, breakable=False,
+                       texture='barrier', name='Barrier block')
 
 
 class StoneWall(Block):
@@ -462,15 +488,12 @@ class Wire(Block):
         # main.map.updateBlock(self.x, self.y, self)
         pass
 
-    def updateBlock(self) -> None:
-        self.texture = 'wire' + self.attributes['rotation']
-
     def renderBlock(self, dest: pygame.Surface, topleftx: int, toplefty: int) -> None:
-        dest.blit(main.textures['grass'], main.textures['grass'].get_rect(topleft=(topleftx, toplefty)))
-        dest.blit(main.textures[self.texture], main.textures[self.texture].get_rect(topleft=(topleftx, toplefty)))
-        pygame.draw.rect(dest, (clamp(self.attributes['energy']*255, 0, 255), 0, 0), (topleftx+BLOCK_W//2-3,
-                                                                                      toplefty+BLOCK_H//2-3,
-                                                                                      5, 5))
+        dest.blit(main.textures16['grass'], main.textures16['grass'].get_rect(topleft=(topleftx, toplefty)))
+        dest.blit(main.textures16[self.texture], main.textures16[self.texture].get_rect(topleft=(topleftx, toplefty)))
+        pygame.draw.rect(dest, (clamp(self.attributes['energy']*255, 0, 255), 0, 0), (topleftx+7,
+                                                                                      toplefty+7,
+                                                                                      2, 2))
     def renderLightmap(self, dest: pygame.Surface, topleftx: int, toplefty: int) -> None:
         t = pygame.transform.scale(self.lightmap, (BLOCK_W, BLOCK_H))
         dest.blit(t, t.get_rect(topleft=(topleftx, toplefty)))
@@ -507,23 +530,18 @@ class Switch(Block):
 
         Block.__init__(self, x, y, name='switch', texture='switchoff', attributes=attributes, transparentForLight=True)
 
-        self.prevFrameAttributes = self.attributes.copy()
+        if self.attributes['on']: self.texture = 'switchon'
 
     def interact(self):
         self.attributes['on'] = not self.attributes['on']
         self.attributes['energy'] = int(self.attributes['on'])
 
-    def updateBlock(self) -> None:
         if self.attributes['on']:
             self.texture = 'switchon'
         else:
             self.texture = 'switchoff'
 
-        if self.attributes != self.prevFrameAttributes:
-            main.map.updateBlock(self.x, self.y, self)
-            main.renderer.renderBlock(self.x, self.y)
-
-        self.prevFrameAttrs = self.attributes.copy()
+        main.map.setBlock(self.x, self.y, self)
 
 
 class Computer(Block):
@@ -850,11 +868,62 @@ class Inventory:
         return False
 
 
+class ChunkLoader:
+    def __init__(self):
+        self.level = main.map.level
+
+        self.visibleChunks = []
+
+    def update(self):
+        points = [
+            (main.x-8, main.y-8), (main.x, main.y-8), (main.x+8, main.y-8),
+            (main.x-8, main.y),   (main.x, main.y),   (main.x+8, main.y),
+            (main.x-8, main.y+8), (main.x, main.y+8), (main.x+8, main.y+8)
+        ]
+
+        chunksToLoad = []
+        self.visibleChunks.clear()
+        for x,y in points:
+            self.visibleChunks.append((x//8, y//8))
+            if not (x,y) in self.level.lvl:
+                chunksToLoad.append((x//8, y//8))
+
+        for x,y in chunksToLoad:
+            # print("Loading chunk", x, y)
+            main.c.sendMessage('load_chunk/' + str(x) + '/' + str(y))
+
+
+class Level:
+    def __init__(self):
+        self.lvl = {}
+
+    def __getitem__(self, item: (int, int)) -> Block:
+        try:
+            if item in self.lvl:
+                return self.lvl[item]
+            else:
+                # print("Index out of bounds error. Tried to access block at", item)
+                return Block.getBlockFromID(item[0], item[1], 'grass')
+        except:
+            print("Level.__getitem__(item) error. item:", item)
+            traceback.print_exc()
+            return Block.getBlockFromID(0, 0, 'grass')
+
+    def __setitem__(self, key: (int, int), value: Block):
+        self.lvl[key] = value
+
+
+
 class MapManager:
     def __init__(self):
-        self.level = {int: Block}
-        self.level = {}
+        self.level = Level()
         self.objects = {}
+
+    def loadChunk(self, x: int, y: int) -> None:
+        pass
+
+    def unloadChunk(self, x: int, y: int):
+        pass
 
     def updateBlock(self, x, y, block: Block):
         self.level[x, y] = block
@@ -908,6 +977,8 @@ class Client:
         self.disconnected = False
         self.disconnectReason = ''
 
+        self.rx, self.tx = 0, 0
+
         try:
             self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -919,8 +990,6 @@ class Client:
             self.playerInLobby = True
 
             self.lobbyMenu()
-
-            self.loadLevel()
         except Exception as e:
             print("Error while connecting to the server:", e)
             traceback.print_exc()
@@ -940,8 +1009,8 @@ class Client:
             errorscreen.display()
 
         self.newMessages = []
-
         self.sent = False
+        self.lastUpdate = 0
 
     def lobbyMenu(self):
         # Structure is [[gameTitle, playersInGame]]
@@ -986,9 +1055,9 @@ class Client:
                             return
 
                         if viewingArchivedGames:
-                            self.sendMessage('join_archived_game/' + games[selectedGame][2])
+                            self.sendMessage('join_archived_game/' + games[selectedGame][2] + '/' + str(main.nickname))
                         else:
-                            self.sendMessage('join_game/' + games[selectedGame][2])
+                            self.sendMessage('join_game/' + games[selectedGame][2] + '/' + str(main.nickname))
                         return
 
             if selectedGame > len(games) and selectedGame != 0:
@@ -1040,56 +1109,6 @@ class Client:
 
             pygame.display.update()
 
-
-    def loadLevel(self):
-        print("Loading level")
-        received = [False, False]
-        start = time.time()
-        while not received == [True, True]:
-            if time.time()-start >= 10:
-                s = ShowErrorMessage('Level is loading for too long\n'
-                                     'Something is definetely not right,\n'
-                                     'or you just have shitty internet.',
-                                     title='Level loading took too long')
-                s.display()
-                return
-
-            try:
-                self.sendMessage('get_level')
-                time.sleep(1 / 10)
-                m = self.getMessages()
-                for msg in m:
-                    if 'map' in msg:
-                        msg = msg.replace('map', '')
-                        level = eval(msg)
-
-                        received[0] = True
-                        traceback.print_exc()
-                    elif 'attributes' in msg:
-                        msg = msg.replace('attributes', '')
-                        attrs = eval(msg)
-
-                        received[1] = True
-                        traceback.print_exc()
-            except:
-                f = open('last_err_code.txt', 'w')
-                traceback.print_exc(file=f)
-                f.close()
-
-                f = open('last_err_code.txt', 'r')
-                err = f.read()
-                f.close()
-
-                s = ShowErrorMessage('Unable to load level. \nSomething is definetely not right.\n'
-                                     "Or you just have shitty internet. \nHere's the error message:\n" + err,
-                                     title='Level loading error.')
-                s.display()
-                return
-
-        for x, y in level:
-            main.map.level[x, y] = Block.getBlockFromID(x, y, level[x, y], attributes=attrs[x, y])
-        print("Level loaded in", round(time.time()-start, 2), "seconds.")
-
     def setNickname(self, nickname: str):
         self.sendMessage('set_nick/' + str(nickname))
 
@@ -1099,71 +1118,83 @@ class Client:
         global bullets
         global nextFrameUpdate
 
-        msg = ''
-        if not nextFrameUpdate:
-            bullets.clear()
+        if time.time() - self.lastUpdate >= 1/30:
+            msg = ''
+            if not nextFrameUpdate:
+                bullets.clear()
 
-            try:
-                self.sendMessage("alive")
-            except Exception as e:
-                print("Exception client.update() 3:", e)
-                traceback.print_exc()
+                try:
+                    msg = ['hello']
+                    while msg != []:
+                        msg = self.getMessages()
 
-            try:
-                msg = self.getMessages()
+                        if msg:
+                            for obj in msg:
+                                if obj:
+                                    self.rx += 1
+                                    s = obj.split('/')
+                                    if s[0] == 'timeofday':
+                                        main.timeofday = float(s[1])
+                                    elif s[0] == 'yourid':
+                                        self.clientId = int(s[1])
 
-                if msg:
-                    for obj in msg:
-                        if obj:
-                            s = obj.split('/')
-                            if s[0] == 'timeofday':
-                                main.timeofday = float(s[1])
-                            elif s[0] == 'yourid':
-                                self.clientId = int(s[1])
+                                    elif s[0] == 'setpos':
+                                        main.movement.x = float(s[1]) * BLOCK_W + BLOCK_W // 2
+                                        main.movement.y = float(s[2]) * BLOCK_H + BLOCK_H // 2
 
-                            elif s[0] == 'setpos':
-                                main.movement.x = float(s[1]) * BLOCK_W + BLOCK_W // 2
-                                main.movement.y = float(s[2]) * BLOCK_H + BLOCK_H // 2
+                                    elif s[0] == 'b':
+                                        bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
+                                                              eval(s[7])))
+                                    elif s[0] == 'p':
+                                        players[int(s[1])] = Player(float(s[2]), float(s[3]), s[4], eval(s[5]), int(s[6]))
+                                    elif s[0] == 'cb':
+                                        x, y = int(s[1]), int(s[2])
+                                        origb = main.map.level[x, y]
+                                        b = Block.getBlockFromID(x, y, s[3],
+                                            eval(s[4]))
 
-                            elif s[0] == 'b':
-                                bullets.append(Bullet(int(s[2]), int(s[3]), int(s[4]), int(s[5]), eval(s[6]),
-                                                      eval(s[7])))
-                            elif s[0] == 'p':
-                                players[int(s[1])] = Player(float(s[2]), float(s[3]), s[4], eval(s[5]), int(s[6]))
-                            elif s[0] == 'cb':
-                                x, y = int(s[1]), int(s[2])
-                                origb = main.map.level[x, y]
-                                b = Block.getBlockFromID(x, y, s[3],
-                                    eval(s[4]))
-                                b.renderBlock(main.renderer.mapsc, x*BLOCK_W, y*BLOCK_H)
-                                main.map.level[x, y] = b
-                                main.map.level[x, y].lightmap = origb.lightmap.copy()
-                                main.map.level[x, y].templightmap = origb.templightmap.copy()
-                            elif s[0] == 'o':
-                                main.map.objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
-                                main.map.objects[int(s[1]), int(s[2])].active = eval(s[4])
-                            elif s[0] == 'msg':
-                                self.newMessages.append([int(s[1]), str(s[2]), (0, 0, 0), False])
-                            elif s[0] == 'service':
-                                self.newMessages.append([0, str(s[1]), eval(s[2]), True])
+                                        if b != origb:
+                                            # print("Changed block id", s[3], ", attribs", s[4])
+                                            main.map.level[x, y] = b
+                                            main.map.level[x, y].lightmap = origb.lightmap.copy()
+                                            main.map.level[x, y].templightmap = origb.templightmap.copy()
+                                    elif s[0] == 'chunk':
+                                        blocks = eval(s[1])
+                                        attributes = eval(s[2])
 
-                            elif s[0] == 'bullet_hit':
-                                health -= int(abs(int(s[1]) - int(s[1]) * main.defenceLevel * 0.01))
-                            elif s[0] == 'disconnect':
-                                print("Disconnected from the server.")
-                                print(s)
-                                self.disconnectReason = s[1]
-                                self.disconnected = True
+                                        for x, y in blocks:
+                                            origb = main.map.level[x, y]
+                                            b = Block.getBlockFromID(x, y, blocks[x, y], attributes[x, y])
+                                            main.map.level[x, y] = b
 
-                    self.sent = False
+                                        # print("Chunk loaded from server")
+                                    elif s[0] == 'o':
+                                        main.map.objects[int(s[1]), int(s[2])] = Object(int(s[1]), int(s[2]), s[3])
+                                        main.map.objects[int(s[1]), int(s[2])].active = eval(s[4])
+                                    elif s[0] == 'msg':
+                                        self.newMessages.append([int(s[1]), str(s[2]), (0, 0, 0), False])
+                                    elif s[0] == 'service':
+                                        self.newMessages.append([0, str(s[1]), eval(s[2]), True])
 
-                if not self.sent:
-                    self.sendMessage('get_objects')
-                    self.sent = True
-            except Exception as e:
-                print("Client.update() exc2:\n", e)
-                traceback.print_exc()
-                print(msg)
+                                    elif s[0] == 'bullet_hit':
+                                        health -= int(abs(int(s[1]) - int(s[1]) * main.defenceLevel * 0.01))
+                                    elif s[0] == 'disconnect':
+                                        print("Disconnected from the server.")
+                                        print(s)
+                                        self.disconnectReason = s[1]
+                                        self.disconnected = True
+
+                            self.sent = False
+
+                        if not self.sent:
+                            self.sendMessage('get_objects')
+                            self.sent = True
+                except Exception as e:
+                    print("Client.update() exc2:\n", e)
+                    traceback.print_exc()
+                    print(msg)
+
+            self.lastUpdate = time.time()
 
     def getMessages(self) -> list:
         try:
@@ -1183,8 +1214,12 @@ class Client:
 
     def sendMessage(self, message: str) -> (bool, Exception):
         try:
-            m = message + ';'
-            self.s.send(m.encode('utf-8'))
+            if message:
+                self.tx += 1
+
+                m = str(message) + ';'
+                self.s.send(m.encode('utf-8'))
+            else: return False, None
 
             return True, None
         except Exception as e:
@@ -1686,7 +1721,44 @@ class EventHandler:
     def __init__(self):
         self.lastMovement = 0
 
+        # The block the mouse is pointing at
+        self.resx, self.resy = 0, 0
+        self.px, self.py = 0, 0
+
     def handleEvents(self):
+        global SCREEN_W, SCREEN_H
+
+        # Transfering screen mouse corrdinates to world coordinates
+
+        mouse = pygame.mouse.get_pos()
+        x, y = int(mouse[0] / (main.curWidth / SCREEN_W)), \
+               int(mouse[1] / (main.curHeight / SCREEN_H))
+
+        movX = 0
+        movY = 0
+
+        if x < SCREEN_W // 2 - BLOCK_W // 2:
+            movX = -1
+        elif SCREEN_W // 2 - BLOCK_W // 2 <= x <= SCREEN_W // 2 + BLOCK_W // 2:
+            movX = 0
+        elif x > SCREEN_W // 2 + BLOCK_W // 2:
+            movX = 1
+
+        if y < SCREEN_H // 2 - BLOCK_H // 2:
+            movY = -1
+        elif SCREEN_H // 2 - BLOCK_H // 2 <= y <= SCREEN_H // 2 + BLOCK_H // 2:
+            movY = 0
+        elif y > SCREEN_H // 2 + BLOCK_H // 2:
+            movY = 1
+
+        ox = (x - (SCREEN_W // 2 - main.pixelx)) // BLOCK_W
+        oy = (y - (SCREEN_H // 2 - main.pixely)) // BLOCK_H
+        self.px, self.py = ox, oy
+
+        resX = clamp(ox, main.x-1, main.x+1)
+        resY = clamp(oy, main.y-1, main.y+1)
+        self.resx, self.resy = resX, resY
+
         for e in pygame.event.get():
 
             if e.type == pygame.QUIT:
@@ -1697,7 +1769,6 @@ class EventHandler:
 
             # When user resizes the window
             elif e.type == pygame.VIDEORESIZE:
-                global SCREEN_W, SCREEN_H
                 main.curWidth = e.w
                 main.curHeight = e.h
 
@@ -1756,102 +1827,67 @@ class EventHandler:
 
             # Handling mouse button presses
             elif e.type == pygame.MOUSEBUTTONDOWN and not main.c.disconnected:
-                mouse = pygame.mouse.get_pos()
-                x, y = int(mouse[0] / (main.curWidth / SCREEN_W)), \
-                       int(mouse[1] / (main.curHeight / SCREEN_H))
+                pressed = pygame.mouse.get_pressed(3)
+                if pressed[0] or pressed[2]:
+                    # print("resX:", resX, "; resY:", resY)
+                    # print("ox:", ox, "; oy:", oy)
 
-                if x < MAP_W * BLOCK_W and y < MAP_H * BLOCK_H:
-                    # Drawing little red "cursor" at mouse position
-                    pygame.draw.rect(main.sc, (255, 0, 0),
-                                     (mouse[0] - 10, mouse[1] - 10, BLOCK_W // 4, BLOCK_H // 4))
+                    # Handling left and right mouse buttons presses
+                    if not (movX == 0 and movY == 0):
+                        # If there's no item in inventory, using "imaginary" pickaxe
+                        if len(main.inventory.inventoryItems) == 0:
+                            i = Item('pickaxe', 'pickaxe', 1)
+                            if pressed[0]:
+                                i.attack(resX, resY, ox, oy)
+                            elif pressed[2]:
+                                i.use(resX, resY, ox, oy)
+                        else:
+                            # If left button was pressed
+                            if pressed[0]:
+                                main.inventory.inventoryItems[main.selectedSlot].attack(
+                                    resX, resY, ox, oy
+                                )
 
-                    pressed = pygame.mouse.get_pressed(3)
-                    if pressed[0] or pressed[2]:
-                        # Transfering screen mouse corrdinates to world coordinates
+                            # If right button was pressed
+                            elif pressed[2]:
 
-                        movX = 0
-                        movY = 0
+                                # If this is just a block, not a special item, then placing it.
+                                # If it is an item, using it.
+                                if main.inventory.inventoryItems[main.selectedSlot].specialItem:
+                                    main.inventory.inventoryItems[main.selectedSlot].use(
+                                        resX, resY, ox, oy)
+                                else:
 
-                        if x < SCREEN_W//2-BLOCK_W//2:
-                            movX = -1
-                        elif SCREEN_W//2-BLOCK_W//2 <= x <= SCREEN_W//2+BLOCK_W//2:
-                            movX = 0
-                        elif x > SCREEN_W//2+BLOCK_W//2:
-                            movX = 1
+                                    # We will place the block only on grass, we won't replace other blocks
+                                    if main.map.level[resX, resY].texture == 'grass' and \
+                                       main.inventory.inventoryItems[main.selectedSlot].count > 0:
 
-                        if y < SCREEN_H//2-BLOCK_H//2:
-                            movY = -1
-                        elif SCREEN_H//2-BLOCK_H//2 <= y <= SCREEN_H//2+BLOCK_H//2:
-                            movY = 0
-                        elif y > SCREEN_H//2+BLOCK_H//2:
-                            movY = 1
+                                        # Checking if newly placed block won't overlap player's hitbox, so
+                                        # player won't get stuck in the block
+                                        origCollidable = main.map.level[resX, resY].collidable
+                                        main.map.level[resX, resY].collidable = \
+                                            Block.getBlockFromID(
+                                                resX, resY,
+                                                main.inventory.inventoryItems[main.selectedSlot].texture,
+                                                main.inventory.inventoryItems[main.selectedSlot].attributes
+                                            ).collidable
 
-                        # For block placing
-                        resX = clamp(main.x + movX, 0, MAP_W-1)
-                        resY = clamp(main.y + movY, 0, MAP_H-1)
+                                        if main.movement.canStepOn(main.pixelx, main.pixely):
+                                            # If everything's alright, placing the block,
+                                            # and decrementing it's count in inventory
+                                            main.map.setBlock(
+                                                resX, resY,
+                                                Block.getBlockFromID(resX, resY,
+                                                                     main.inventory.inventoryItems[main.selectedSlot].texture,
+                                                                     main.inventory.inventoryItems[main.selectedSlot].attributes)
+                                            )
 
-                        ox = clamp((x - (SCREEN_W//2-main.pixelx)) // BLOCK_W, 0, MAP_W-1)
-                        oy = clamp((y - (SCREEN_H//2-main.pixely)) // BLOCK_H, 0, MAP_H-1)
-
-                        print("resX:", resX, "; resY:", resY)
-                        print("ox:", ox, "; oy:", oy)
-
-                        # Handling left and right mouse buttons presses
-                        if not (movX == 0 and movY == 0) and 0 <= resX <= MAP_W and 0 <= resY <= MAP_H:
-                            # If there's no item in inventory, using "imaginary" pickaxe
-                            if len(main.inventory.inventoryItems) == 0:
-                                i = Item('pickaxe', 'pickaxe', 1)
-                                if pressed[0]:
-                                    i.attack(resX, resY, ox, oy)
-                                elif pressed[2]:
-                                    i.use(resX, resY, ox, oy)
-                            else:
-                                # If left button was pressed
-                                if pressed[0]:
-                                    main.inventory.inventoryItems[main.selectedSlot].attack(
-                                        resX, resY, ox, oy
-                                    )
-
-                                # If right button was pressed
-                                elif pressed[2]:
-
-                                    # If this is just a block, not a special item, then placing it.
-                                    # If it is an item, using it.
-                                    if main.inventory.inventoryItems[main.selectedSlot].specialItem:
-                                        main.inventory.inventoryItems[main.selectedSlot].use(
-                                            resX, resY, ox, oy)
-                                    else:
-
-                                        # We will place the block only on grass, we won't replace other blocks
-                                        if main.map.level[resX, resY].texture == 'grass' and \
-                                           main.inventory.inventoryItems[main.selectedSlot].count > 0:
-
-                                            # Checking if newly placed block won't overlap player's hitbox, so
-                                            # player won't get stuck in the block
-                                            origCollidable = main.map.level[resX, resY].collidable
-                                            main.map.level[resX, resY].collidable = \
-                                                Block.getBlockFromID(
-                                                    resX, resY,
-                                                    main.inventory.inventoryItems[main.selectedSlot].texture,
-                                                    main.inventory.inventoryItems[main.selectedSlot].attributes
-                                                ).collidable
-
-                                            if main.movement.canStepOn(main.pixelx, main.pixely):
-                                                # If everything's alright, placing the block,
-                                                # and decrementing it's count in inventory
-                                                main.map.setBlock(
-                                                    resX, resY,
-                                                    Block.getBlockFromID(resX, resY,
-                                                                         main.inventory.inventoryItems[main.selectedSlot].texture,
-                                                                         main.inventory.inventoryItems[main.selectedSlot].attributes)
-                                                )
-
-                                                main.inventory.removeItem(
-                                                    Item(main.inventory.inventoryItems[main.selectedSlot].name,
-                                                         main.inventory.inventoryItems[main.selectedSlot].texture, 1,
-                                                         attributes=main.inventory.inventoryItems[main.selectedSlot].attributes))
-                                            else:
-                                                main.map.level[resX, resY].collidable = origCollidable
+                                            main.inventory.removeItem(
+                                                Item(main.inventory.inventoryItems[main.selectedSlot].name,
+                                                     main.inventory.inventoryItems[main.selectedSlot].texture, 1,
+                                                     attributes=main.inventory.inventoryItems[main.selectedSlot].attributes))
+                                        else:
+                                            main.map.level[resX, resY].collidable = origCollidable
 
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_r:
@@ -1876,9 +1912,9 @@ class Renderer:
         self.screen: pygame.Surface
         self.screen = main.sc
 
-        self.mapsc: pygame.Surface
-        self.mapsc = pygame.Surface((MAP_W*BLOCK_W, MAP_H*BLOCK_H))
-        # self.mapsc.fill((255, 0, 255))
+        self.chunks: {(int, int): pygame.Surface}
+        self.chunks = {}
+        self.renderedChunks = []
 
         self.objsc: pygame.Surface
         self.objsc = pygame.Surface((MAP_W*BLOCK_W, MAP_H*BLOCK_H))
@@ -1890,25 +1926,32 @@ class Renderer:
         self.lightsc.set_alpha(128)
         self.lightsc.set_colorkey((255, 255, 0))
 
-        self.waterBg = pygame.Surface(((MAP_W+10)*BLOCK_W, (MAP_H+10)*BLOCK_H))
-        for x in range(0, MAP_W+20):
-            for y in range(0, MAP_H+20):
-                self.waterBg.blit(main.textures['water'], main.textures['water'].get_rect(
-                    topleft=(x*BLOCK_W, y*BLOCK_H)))
-
         self.blackScreen = pygame.Surface((BLOCK_W, BLOCK_H))
         self.blackScreen.fill((0, 0, 0))
 
         self.blackScreenAlpha = 0
 
-    def renderBlock(self, x, y):
+    def renderBlock(self, x, y, dest=None):
+        if dest is None:
+            dest = self.sc
+
         if 0 <= x <= MAP_W-1 and 0 <= y <= MAP_H-1:
             b = main.map.level[x, y]
             #self.mapsc.blit(main.textures['grass'], main.textures['grass'].get_rect(topleft=(x * BLOCK_W,
             #                                                                                 y * BLOCK_H)))
 
             b.lightmap.set_alpha(self.blackScreenAlpha)
-            b.renderBlock(self.mapsc, x * BLOCK_W, y * BLOCK_H)
+            b.renderBlock(dest, x * BLOCK_W, y * BLOCK_H)
+
+    def renderChunk(self, cx, cy):
+        for x in range(cx*8, cx*8+8):
+            for y in range(cy*8, cy*8+8):
+                b = main.map.level[x, y]
+                #self.mapsc.blit(main.textures['grass'], main.textures['grass'].get_rect(topleft=(x * BLOCK_W,
+                #                                                                                 y * BLOCK_H)))
+
+                b.lightmap.set_alpha(self.blackScreenAlpha)
+                b.renderBlock(self.chunks[cx, cy], (x%8) * 16, (y%8) * 16)
 
     def renderMap(self):
         for x in range(MAP_W):
@@ -1932,20 +1975,14 @@ class Renderer:
         # print(r, g, b, coef)
         self.sc.fill((int(r), int(g), int(b)))
 
-        """
-        # Rendering map
-        b: Block
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                b = main.map.level[x, y]
+        self.renderedChunks.clear()
+        for x, y in main.chunks.visibleChunks:
+            if not (x, y) in self.chunks:
+                self.chunks[x, y] = pygame.Surface((128, 128))
 
-                self.mapsc.blit(main.textures['grass'], main.textures['grass'].get_rect(topleft=(x * BLOCK_W,
-                                                                                                 y * BLOCK_H)))
-
-                b.lightmap.set_alpha(blackScreenAlpha)
-                b.renderBlock(self.mapsc, x * BLOCK_W, y * BLOCK_H)
-        """
-        self.renderMap()
+            if not (x, y) in self.renderedChunks:
+                self.renderChunk(x, y)
+                self.renderedChunks.append((x, y))
 
         self.objsc.fill((255, 0, 255))
 
@@ -1963,20 +2000,43 @@ class Renderer:
                                 main.textures[main.map.objects[obj].texture].get_rect(
                                     topleft=(main.map.objects[obj].x, main.map.objects[obj].y)))
 
+        for x,y in main.chunks.visibleChunks:
+            chunk = pygame.transform.scale(self.chunks[x, y], (8*BLOCK_W, 8*BLOCK_H))
+            self.sc.blit(chunk, chunk.get_rect(
+                topleft=(
+                    SCREEN_W//2 + (x*8*BLOCK_W - main.pixelx),
+                    SCREEN_H//2 + (y*8*BLOCK_H - main.pixely)
+                )
+            ))
+
         # Rendering enemies ( other players )
         for p in players:
             player = players[p]
             if player.active:
-                self.objsc.blit(main.textures[player.texture],
-                                main.textures[player.texture].get_rect(center=(player.x, player.y)))
-                pygame.draw.rect(self.objsc, (0, 0, 0),
-                                 (player.x - 3 - BLOCK_W // 2, player.y - 3 - BLOCK_H // 2, BLOCK_W + 6,
-                                  BLOCK_H // 8 + 6))
-                pygame.draw.rect(self.objsc, (255, 0, 0), (
-                    player.x - BLOCK_W // 2, player.y - BLOCK_H // 2, int(player.health * 0.8), BLOCK_H // 8))
+                x = (SCREEN_W // 2 + (player.x - main.pixelx))
+                y = (SCREEN_H // 2 + (player.y - main.pixely))
 
-        self.sc.blit(self.mapsc, self.mapsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
-                                                              SCREEN_H // 2 - main.pixely)))
+                self.sc.blit(main.textures[player.texture],
+                                main.textures[player.texture].get_rect(center=(x, y)))
+                pygame.draw.rect(self.sc, (0, 0, 0),
+                                 (x - 3 - BLOCK_W // 2, y - 3 - BLOCK_H // 2, BLOCK_W + 6,
+                                  BLOCK_H // 8 + 6))
+                pygame.draw.rect(self.sc, (255, 0, 0), (
+                    x - BLOCK_W // 2, y - BLOCK_H // 2, int(player.health * 0.8), BLOCK_H // 8))
+
+        # Rendering "cursor"
+        t = main.textures['cursor']
+        if main.eventhandler.resx != main.eventhandler.px or \
+           main.eventhandler.resy != main.eventhandler.py:
+            t = main.textures['cursor_far']
+
+        self.sc.blit(t, t.get_rect(
+            topleft=(SCREEN_W//2 + (main.eventhandler.px * BLOCK_W - main.pixelx),
+                     SCREEN_H//2 + (main.eventhandler.py * BLOCK_H - main.pixely))
+        ))
+
+        # self.sc.blit(self.mapsc, self.mapsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
+        #                                                       SCREEN_H // 2 - main.pixely)))
 
         self.sc.blit(self.objsc, self.objsc.get_rect(topleft=(SCREEN_W // 2 - main.pixelx,
                                                               SCREEN_H // 2 - main.pixely)))
@@ -2052,11 +2112,11 @@ class Renderer:
             r = t.get_rect(topright=(SCREEN_W, BLOCK_H))
             self.sc.blit(t, r)
 
-            t = main.font.render("x: " + str(main.x), True, (0, 0, 0))
+            t = main.font.render("x: " + str(main.x) + ", y: " + str(main.y), True, (0, 0, 0))
             r = t.get_rect(topright=(SCREEN_W, BLOCK_H*1.5))
             self.sc.blit(t, r)
 
-            t = main.font.render("y: " + str(main.y), True, (0, 0, 0))
+            t = main.font.render("rx: " + str(main.rx) + ", tx: " + str(main.tx), True, (0, 0, 0))
             r = t.get_rect(topright=(SCREEN_W, BLOCK_H*2))
             self.sc.blit(t, r)
 
@@ -2097,12 +2157,6 @@ class Renderer:
         for message in main.messages:
             if message.alpha <= 0:
                 main.messages.remove(message)
-
-        # Rendering red "cursor" under the actual cursor.
-        mouse = pygame.mouse.get_pos()
-        x, y = int(mouse[0] / (main.curWidth / SCREEN_W)), \
-               int(mouse[1] / (main.curHeight / SCREEN_H))
-        pygame.draw.rect(self.sc, (255, 0, 0), (x - 10, y - 10, BLOCK_W // 4, BLOCK_H // 4))
 
         if main.curWidth != SCREEN_W or main.curHeight != SCREEN_H:
             t = pygame.transform.scale(self.sc, (main.curWidth, main.curHeight))
@@ -2204,8 +2258,8 @@ class CollisionDetection:
         movX = self.xvel * delta * self.defaultMovementSpeed
         movY = self.yvel * delta * self.defaultMovementSpeed
 
-        futureX = self.clamp(self.x + (movX * self.getMovementSpeed(self.x+movX, self.y+movY)), 0, (MAP_W-0.5) * BLOCK_W)
-        futureY = self.clamp(self.y + (movY * self.getMovementSpeed(self.x+movY, self.y+movY)), 0, (MAP_H-0.5) * BLOCK_H)
+        futureX = self.clamp(self.x + (movX * self.getMovementSpeed(self.x+movX, self.y+movY)), 0, LEVEL_W*BLOCK_W)
+        futureY = self.clamp(self.y + (movY * self.getMovementSpeed(self.x+movY, self.y+movY)), 0, LEVEL_H*BLOCK_H)
 
         canstep = False
         if self.canStepOn(futureX, self.y):
@@ -2224,8 +2278,8 @@ class CollisionDetection:
         # if -0.01 <= self.xvel <= 0.01: self.xvel = 0
         # if -0.01 <= self.yvel <= 0.01: self.yvel = 0
 
-        self.x = self.clamp(self.x, 0, (MAP_W-0.5) * BLOCK_W)
-        self.y = self.clamp(self.y, 0, (MAP_H-0.5) * BLOCK_H)
+        self.x = self.clamp(self.x, 0, LEVEL_W * BLOCK_W)
+        self.y = self.clamp(self.y, 0, LEVEL_H * BLOCK_H)
 
     def getMovementSpeed(self, x, y) -> float:
         points = [
@@ -2237,15 +2291,14 @@ class CollisionDetection:
 
         movementSpeeds = []
         for point in points:
-            if 0 <= point[0] < MAP_W*BLOCK_W and 0 <= point[1] < MAP_H*BLOCK_H:
-                movementSpeeds.append(main.map.level[
-                                          int(point[0] / BLOCK_W), int(point[1] / BLOCK_H)].movementSpeedMultiplier)
+            movementSpeeds.append(main.map.level[
+                                      int(point[0] / BLOCK_W), int(point[1] / BLOCK_H)].movementSpeedMultiplier)
 
         if len(movementSpeeds) == 0: movementSpeeds = [1]
         # print(movementSpeeds)
         return min(movementSpeeds)
 
-    def getPos(self) -> (int, int):
+    def getPos(self) -> (float, float):
         return self.x, self.y
 
     @staticmethod
@@ -2289,21 +2342,19 @@ class CollisionDetection:
 
         canStep = True
         for point in points:
-            if 0 <= point[0] <= MAP_W * BLOCK_W and 0 <= point[1] <= MAP_H * BLOCK_H:
-                if main.map.level[int(point[0] / BLOCK_W), int(point[1] / BLOCK_H)].collidable:
-                    return False
-            else: return False
+            if main.map.level[int(point[0] / BLOCK_W), int(point[1] / BLOCK_H)].collidable:
+                return False
 
         return True
 
 
 class TextureManager:
-    def __init__(self, path: str):
+    def __init__(self, path: str, width=BLOCK_W, height=BLOCK_H):
         files = os.listdir(path)
         self.__textures = {}
         for filename in files:
             self.__textures[filename.replace('.png', '')] = \
-                pygame.transform.scale(pygame.image.load('textures/' + filename).convert_alpha(), (BLOCK_W, BLOCK_H))
+                pygame.transform.scale(pygame.image.load('textures/' + filename).convert_alpha(), (width, height))
 
         self.__errortexture = pygame.Surface((BLOCK_W, BLOCK_H))
         self.__errortexture.fill((255, 0, 255))
@@ -2334,7 +2385,8 @@ class Main:
 
     def loadTextures(self):
         self.textures = TextureManager('textures/')
-        print(self.textures['hello'])
+
+        self.textures16 = TextureManager('textures/', width=16, height=16)
 
     def loadSounds(self):
         files = os.listdir('sounds/')
@@ -2378,6 +2430,7 @@ class Main:
         t = self.font.render("Hello, world", True, (255, 255, 255))
 
         self.map = MapManager()
+        self.chunks = ChunkLoader()
         self.inventory = Inventory()
 
         if playerClass is None:
@@ -2412,6 +2465,12 @@ class Main:
 
         self.lightProcessor = LightProcessor()
 
+        # rx - received packets from the server,
+        # tx - packets send to the server
+        # prevNetworkCheck - when was the last time measurements were taken
+        self.rx, self.tx = 0, 0
+        self.prevNetworkCheck = time.time()
+
         # Connecting to the server
         self.c = Client(self.serverIp, self.serverPort)
         self.c.setNickname(self.nickname)
@@ -2437,6 +2496,11 @@ class Main:
         self.prevFrame = time.time()
         self.__deltaTime = 0
 
+        # To save bandwidth ( sending local player to the server only if it was changed )
+        self.prevx, self.prevy, self.prevtexture, self.prevhealth = \
+            self.pixelx, self.pixely, self.playerClass.texture, health
+        self.lastTimePlayerDataSent = time.time()
+
         self.displayingDebugInfo = False
 
         self.defenceLevel = 0
@@ -2457,13 +2521,20 @@ class Main:
         self.movement.update()
 
         if not self.c.disconnected:
-            self.c.sendMessage(
-                'set_player' + str(self.pixelx) + '/' + str(self.pixely) + '/' +
-                str(self.playerClass.texture) + '/' + str(health)
-            )
+            if time.time() - self.lastTimePlayerDataSent >= 1/30:
+                if self.prevx != self.pixelx or self.prevy != self.pixely or \
+                   self.playerClass.texture != self.prevtexture or health != self.prevhealth:
+                    self.c.sendMessage(
+                        'set_player' + str(self.pixelx) + '/' + str(self.pixely) + '/' +
+                        str(self.playerClass.texture) + '/' + str(health)
+                    )
+
+                    self.prevx, self.prevy, self.prevtexture, self.prevhealth = \
+                        self.pixelx, self.pixely, self.playerClass.texture, health
 
             self.c.update()
             self.map.updateMap()
+            self.chunks.update()
 
             if self.c.newMessages:
                 for msg in self.c.newMessages:
@@ -2494,6 +2565,11 @@ class Main:
         # print(v)
         # if v > 0:
         #     time.sleep(v)
+
+        if time.time() - self.prevNetworkCheck >= 1:
+            self.rx, self.tx = self.c.rx, self.c.tx
+            self.c.rx, self.c.tx = 0, 0
+            self.prevNetworkCheck = time.time()
 
         if time.time() - self.prevFpsCheck >= 1:
             self.fps = self.__frames
@@ -2527,6 +2603,7 @@ class StartMenu:
     def __init__(self):
         self.blitsc = pygame.Surface((SCREEN_W, SCREEN_H))
         self.origsc = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.RESIZABLE)
+        pygame.display.set_caption('BattleKiller 2D ' + str(GAME_VERSION))
 
         self.curWidth, self.curHeight = SCREEN_W, SCREEN_H
 

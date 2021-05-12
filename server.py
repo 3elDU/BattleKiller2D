@@ -5,8 +5,8 @@ import traceback
 import os
 from tkinter import *
 
-MAP_W = 16
-MAP_H = 8
+MAP_W = 1024
+MAP_H = 1024
 
 
 def clamp(val, mn, mx):
@@ -551,9 +551,7 @@ class Game:
     name is string, name of the game, which will be displayed to other clients.
     """
 
-    def __init__(self, name: str, gameId=None,
-                 level=None  # If level will be not none, it will be used as level
-                 ):
+    def __init__(self, name: str, gameId=None):
         self.players: [Client]
         self.players = []
         # Storing timestamp when last player joined
@@ -571,41 +569,51 @@ class Game:
         self.timeofday = 0
 
         # Generating level
+        self.blocksToUpdate: [(int, int)]
+        self.blocksToUpdate = []
+
+        self.savePath = main.config.get('saves_folder') + '/' + str(self.name) + '.' + str(self.gameID) + '/'
+        try: os.mkdir(self.savePath)
+        except: pass
+
         self.changedBlocks = []
         print("Initializing level for game", self.getGameIDString())
         self.level = Level(self)
-        if level is not None:
-            try:
-                lvl = level
-                if type(lvl) == str:
-                    lvl = eval(lvl)
 
-                self.level.setLevel(lvl)
-            except Exception as e:
-                print(self.getGameIDString(), "Failed to inialize level from variable:", e)
-                self.level.generateLevel()
-        else:
-            print("Generating level for game", self.getGameIDString())
-            self.level.generateLevel()
+        try:
+            f = open(self.savePath + 'generated')
+            self.level.generatedChunks = eval(f.read())
+            f.close()
+        except:
+            f = open(self.savePath + 'generated', 'w')
+            f.write('[]')
+            f.close()
 
         self.computers: [Computer]
         self.computers = []
         self.computerUpdatesPerSecond = main.config.get('computerClockSpeed')
         self.__lastComputersUpdate = time.time()
 
-        # Spawnpoint where joined players will appear
-        print("Creating spawnpoint ", end='')
-        generated = False
-        while not generated:
+        try:
+            f = open(self.savePath + 'spawnpoint')
+            x, y = eval(f.read())
+            f.close()
+        except:
             x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
-            if self.level.level[x, y] == 'grass':
-                self.spawn = Spawnpoint(x, y)
-                print("at", self.spawn.x, self.spawn.y, "for game", self.getGameIDString())
-                break
+            f = open(self.savePath + 'spawnpoint', 'w')
+            f.write(str((x, y)))
+            f.close()
+
+        # Spawnpoint where joined players will appear
+        print(self.getGameIDString(), "Creating spawnpoint ", end='')
+        self.spawn = Spawnpoint(x, y)
+        self.level.setBlock(x, y, 'spawnpoint')
+        print("at", self.spawn.x, self.spawn.y)
 
         self.lastBulletUpdate = time.time()
         self.lastBoostSpawn = time.time()
         self.lastWireUpdate = time.time()
+        self.lastAutosave = time.time()
 
         self.bullets = []
         self.bullets: [Bullet]
@@ -642,11 +650,12 @@ class Game:
             f.write(str(self.level.level))
             f.close()
 
-    def addPlayer(self, sock: socket.socket, addr: tuple):
+    def addPlayer(self, sock: socket.socket, addr: tuple, nickname=''):
         player = Player(0, 0, 'grass', 100, str(self.i))
 
         client = Client(sock, addr, player, self.i, self)
         client.setPosition(self.spawn.x, self.spawn.y)
+        client.setNickname(nickname)
         self.players.append(client)
 
         self.i += 1
@@ -682,6 +691,9 @@ class Game:
             elif cmd[0] == '/spawnchest':
                 self.level.createChest(int(cmd[1]), int(cmd[2]))
                 return 'Successfully generated loot chest at ' + cmd[1] + ', ' + cmd[2]
+            elif cmd[0] == '/teleport':
+                self.players[int(cmd[1])].setPosition(int(cmd[2]), int(cmd[3]))
+                return 'Teleported player ' + str(cmd[1]) + ' to x ' + str(cmd[2]) + ', y ' + str(cmd[3])
             else:
                 return 'Unknown command.'
         except Exception as e:
@@ -793,9 +805,34 @@ class Game:
                 print(self.getGameIDString(), "Disconnecting inactive player (", player.getNickname(), ")")
                 self.players.remove(player)
 
+    def save(self):
+        f = open(self.savePath + 'generated', 'w')
+        f.write(str(self.level.generatedChunks))
+        for x, y in self.level.generatedChunks:
+            blocks = {}
+            attributes = {}
+
+            for x1 in range(x * 8, x * 8 + 8):
+                for y1 in range(y * 8, y * 8 + 8):
+                    blocks[x1, y1] = self.level.level[x1, y1]
+                    attributes[x1, y1] = self.level.attributes[x1, y1]
+
+            f = open(self.savePath + str(x) + '.' + str(y) + '.region', 'w')
+            f.write(str(blocks) + '\n' + str(attributes))
+
+    def __autosave(self):
+        if time.time() - self.lastAutosave >= main.config.get('autosave_delay'):
+            self.save()
+            print(self.getGameIDString(), "autosave completed.")
+            self.lastAutosave = time.time()
+
+    def __loadChunks(self):
+        pass
+
     def update(self) -> None:
         try:
             # Regenerating spawn point if there's a block at spawnpoint coordinates.
+            """
             if self.level.level[self.spawn.x, self.spawn.y] != 'grass':
                 print("Spawnpoint was blocked, regenerating it")
                 created = False
@@ -804,6 +841,16 @@ class Game:
                     if self.level.level[x, y] in ['grass', 'wooden_door_opened']:
                         self.spawn = Spawnpoint(x, y)
                         created = True
+            """
+
+            self.blocksToUpdate.clear()
+            player: Client
+            for player in self.players:
+                x,y = int(player.player.x)//80, int(player.player.y)//80
+                for x1 in range(x-10, x+11):
+                    for y1 in range(y-6, y+7):
+                        self.blocksToUpdate.append((x1, y1))
+            # print(self.blocksToUpdate)
 
             if time.time() - self.lastWireUpdate >= 1/self.gameUpdatesPerSecond:
                 self.level.updateLevel()
@@ -817,27 +864,25 @@ class Game:
                 self.__updateClients()
                 self.__updateChangedData()
                 self.__processCommands()
+                self.__loadChunks()
+                self.__autosave()
 
                 # self.__deleteDisconnectedPlayers()
 
                 # Spawning chests ( only if there is at least one player online )
                 if time.time() - self.lastBoostSpawn >= 60 and self.getPlayersOnline() > 0:
-                    print(self.getGameIDString(), "Spawning new ", end='')
+                    print(self.getGameIDString(), "Spawning bonus chest ", end='')
                     spawned = False
                     while not spawned:
-                        x, y = random.randint(0, MAP_W - 1), random.randint(0, MAP_H - 1)
+                        x, y = random.choice(self.blocksToUpdate)
                         if self.level.level[x, y] == 'grass':
-                            if random.randint(0, 4) == 0:
-                                print("health boost")
-                                self.level.setBlock(x, y, 'heart')
-                            else:
-                                print("chest")
-                                self.level.createChest(x, y)
+                            print("at", x, y)
+                            self.level.createChest(x, y)
                             spawned = True
 
                     self.lastBoostSpawn = time.time()
 
-                self.timeofday += 1/2400
+                self.timeofday += 1/main.config.get('tickSpeed')/100
                 if self.timeofday >= 1: self.timeofday = 0
 
                 self.__updateBullets()
@@ -882,6 +927,9 @@ class Client:
         # Messages here will be sended to client as-is
         self.rawDataToSend = []
 
+        # Player's id and time of day will be send only one time in 5 seconds
+        self.whenBasicDataSent = 0
+
         self.lastAliveMessage = time.time()
 
         print(self.game.getGameIDString(), "Client #" + str(self.clientID) + " connected: ", self.a)
@@ -918,11 +966,10 @@ class Client:
         try:
             message: str
             # if self.__messagesFromClient: print(self.__messagesFromClient)
-            for message in self.__messagesFromClient:
-                if message == 'alive':
-                    self.lastAliveMessage = time.time()
+            if self.__messagesFromClient: self.lastAliveMessage = time.time()
 
-                elif message.startswith('/'):
+            for message in self.__messagesFromClient:
+                if message.startswith('/'):
                     print(self.game.getGameIDString(), "Command from", self.getNickname(), ":", message)
                     self.game.commandsFromClients.append([self.clientID, message])
 
@@ -934,33 +981,20 @@ class Client:
                     self.s.close()
                     print(self.game.getGameIDString(), self.getNickname(), "with address", self.a, "disconnected.")
 
-                elif message == 'unity_get_level':
-                    print(self.game.getGameIDString(), self.getNickname(), " (unity client) loaded the map.")
-                    m = ''
-                    for x in range(MAP_W):
-                        for y in range(MAP_H):
-                            m += self.game.level.level[x, y]
-                            if y < MAP_H-1: m += '^'
-                            elif x < MAP_W-1: m += '~'
-                            
+                elif 'load_chunk' in message:
+                    _, x, y = message.split('/')
+                    x, y = int(x), int(y)
 
-                    s = 'map' + m
-                    # print(self.game.level.level)
-                    # print(s)
-                    self.dataToSend.append(s)
-                elif message == 'get_level':
-                    # print(self.game.level.level)
-                    # print(self.game.level.attributes)
-                    print(self.game.getGameIDString(), self.getNickname(), "loaded the map.")
-                    self.dataToSend.append('map' + str(self.game.level.level))
-                    self.dataToSend.append('attributes' + str(self.game.level.attributes))
+                    blocks, attributes = self.game.level.getChunk(x, y)
+                    self.dataToSend.append('chunk/' + str(blocks) + '/' + str(attributes))
 
                 elif message == 'get_objects':
                     m = ''
 
-                    m += 'timeofday/' + str(self.game.timeofday) + ';'
-
-                    m += 'yourid/' + str(self.clientID) + ';'
+                    if time.time() - self.whenBasicDataSent >= 5:
+                        m += 'timeofday/' + str(self.game.timeofday) + ';'
+                        m += 'yourid/' + str(self.clientID) + ';'
+                        self.whenBasicDataSent = time.time()
 
                     for p in range(len(self.playersLeft)):
                         m += 'p/' + str(self.playersLeft[p]) + '/0/0/mage/False/0;'
@@ -998,8 +1032,8 @@ class Client:
                     for b in self.rawDataToSend:
                         m += b + ';'
 
-                    if m == '':
-                        m = 'nothing'
+                    # if m == '':
+                    #     m = 'nothing'
 
                     self.dataToSend.append(m)
                     self.changedBlocks.clear()
@@ -1027,11 +1061,10 @@ class Client:
 
                     message = message.replace('set_block', '').split('/')
 
-                    x, y, block = int(message[0]), int(message[1]), message[2]
+                    x, y, block, attributes = int(message[0]), int(message[1]), message[2], eval(message[3])
 
                     self.game.level.level[x, y] = block
-                    if len(message) > 3:
-                        self.game.level.attributes[x, y] = eval(message[3])
+                    self.game.level.attributes[x, y] = attributes
 
                     if 'computer' in block:
                         c = Computer(self.game, x, y)
@@ -1167,125 +1200,118 @@ class Client:
                 print(self.game.getGameIDString(), "Exception while trying to disconnect", self.getNickname(), e)
 
 
+class LevelContainer:
+    def __init__(self, game: Game, defaultVal, disableChecking=False):
+        self.lvl = {}
+
+        self.game = game
+        self.defaultVal = defaultVal
+        self.disableChecking = disableChecking
+
+    def __getitem__(self, item: (int, int)):
+        try:
+            if item in self.lvl:
+                return self.lvl[item]
+            else:
+                # print("Index out of bounds error. Tried to access block at", item)
+                return self.defaultVal
+        except:
+            print("Level.__getitem__(item) error. item:", item)
+            traceback.print_exc()
+            return self.defaultVal
+
+    def __setitem__(self, key: (int, int), value):
+        if key in self.lvl and not self.disableChecking:
+            if value != self.lvl[key] and key not in self.game.changedBlocks:
+                #print(value, self.lvl[key])
+                self.game.changedBlocks.append([key[0], key[1]])
+        self.lvl[key] = value
+
+
 class Level:
     def __init__(self, game: Game):
         self.game = game
 
-        self.level: {(int, int): str}
-        self.level = {}
-
-        self.attributes: {(int, int): dict}
-        self.attributes = {}
-
-        self.__prevFrameAttributes: {(int, int): dict}
-        self.__prevFrameAttributes = {}
-
-        self.__prevFrameBlocks: {(int, int): str}
-        self.__prevFrameBlocks = {}
-
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                self.level[x, y] = 'grass'
-                self.attributes[x, y] = {}
-
-        self.__updateMapBuffer()
+        self.level = LevelContainer(self.game, 'grass')
+        self.attributes = LevelContainer(self.game, {}, disableChecking=True)
+        self.generatedChunks = []
 
         self.__generated = False
-
-    def __updateMapBuffer(self):
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                try:
-                    self.__prevFrameAttributes[x, y] = self.attributes[x, y].copy()
-                    self.__prevFrameBlocks[x, y] = self.level[x, y]
-                except:
-                    self.__prevFrameAttributes[x, y] = {}
-                    self.__prevFrameBlocks[x, y] = 'grass'
-
-    def acceptAllUpdates(self):
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                if self.__prevFrameBlocks[x, y] != self.level[x, y] or \
-                   self.__prevFrameAttributes[x, y] != self.attributes[x, y]:
-                    # print("Changed block at", x, y, "old:", self.__prevFrameBlocks[x, y], "new:", self.level[x, y],
-                    #       '\nold attributes:', self.__prevFrameAttributes[x, y], 'new:', self.attributes[x, y], '\n')
-                    self.game.changedBlocks.append([x, y])
-        self.__updateMapBuffer()
-
-    def declineAllUpdates(self):
-        pass
 
     def updateLevel(self):
         # Updating wires
         wiresUpdated = 0
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                if 'wire' in self.level[x, y]:
-                    variant = ['f', 'f', 'f', 'f']
-                    if x > 0 and 'electrical' in self.attributes[x-1, y] and self.attributes[x, y]['electrical']:
-                        variant[2] = 't'
-                    if x < MAP_W - 1 and 'electrical' in self.attributes[x+1, y] and self.attributes[x, y]['electrical']:
-                        variant[3] = 't'
-                    if y > 0 and 'electrical' in self.attributes[x, y-1] and self.attributes[x, y]['electrical']:
-                        variant[0] = 't'
-                    if y < MAP_H - 1 and 'electrical' in self.attributes[x, y+1] and self.attributes[x, y]['electrical']:
-                        variant[1] = 't'
+        for x,y in self.game.blocksToUpdate:
+            if 'wire' in self.level[x, y]:
+                variant = ['f', 'f', 'f', 'f']
+                if 'electrical' in self.attributes[x-1, y] and self.attributes[x, y]['electrical']:
+                    variant[2] = 't'
+                if 'electrical' in self.attributes[x+1, y] and self.attributes[x, y]['electrical']:
+                    variant[3] = 't'
+                if 'electrical' in self.attributes[x, y-1] and self.attributes[x, y]['electrical']:
+                    variant[0] = 't'
+                if 'electrical' in self.attributes[x, y+1] and self.attributes[x, y]['electrical']:
+                    variant[1] = 't'
 
-                    variant = "".join(i for i in variant)
+                variant = "".join(i for i in variant)
 
-                    if variant != self.attributes[x, y]['rotation']:
-                        a = self.attributes[x, y]
-                        a['rotation'] = variant
-                        self.replaceBlockAttributes(x, y, a)
-                        wiresUpdated += 1
+                if variant != self.attributes[x, y]['rotation']:
+                    self.attributes[x, y]['rotation'] = variant
+                    self.game.changedBlocks.append([x, y])
+                    wiresUpdated += 1
 
-        # if wiresUpdated > 0:
-        #     print("Updated wires:", wiresUpdated)
+        if wiresUpdated > 0:
+            pass
+            # print("Updated wires:", wiresUpdated)
 
         positions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                if 'switch' in self.level[x, y] and self.attributes[x, y]['on']:
+        for x,y in self.game.blocksToUpdate:
+            if 'switch' in self.level[x, y] and self.attributes[x, y]['on']:
 
-                    for pos in positions:
-                        x1, y1 = x + pos[0], y + pos[1]
-                        if 0 <= x1 <= MAP_W - 1 and 0 <= y1 <= MAP_H - 1:
+                for pos in positions:
+                    x1, y1 = x + pos[0], y + pos[1]
+                    if 'wire' in self.level[x1, y1] or 'lamp' in self.level[x1, y1] or 'computer' in self.level[x1, y1]:
+                        if not 'energy_source' in self.attributes[x1, y1] \
+                           and self.attributes[x1, y1]['energy'] == 0:
+                            self.setBlockAttribute(x1, y1, 'energy_source', (x, y))
+                            self.setBlockAttribute(x1, y1, 'energy', 1)
+                            self.game.changedBlocks.append([x1, y1])
+
+            elif 'wire' in self.level[x, y]:
+                if 'energy' in self.attributes[x, y] and 'energy_source' in self.attributes[x, y]:
+                    if self.attributes[x, y]['energy'] > 0 and \
+                       'energy' in self.attributes[self.attributes[x, y]['energy_source']] and \
+                       self.attributes[self.attributes[x, y]['energy_source']]['energy'] > 0:
+
+                        for pos in positions:
+                            x1, y1 = x + pos[0], y + pos[1]
                             if 'wire' in self.level[x1, y1] or 'lamp' in self.level[x1, y1] or 'computer' in self.level[x1, y1]:
                                 if not 'energy_source' in self.attributes[x1, y1] \
                                    and self.attributes[x1, y1]['energy'] == 0:
                                     self.setBlockAttribute(x1, y1, 'energy_source', (x, y))
                                     self.setBlockAttribute(x1, y1, 'energy', 1)
-
-                elif 'wire' in self.level[x, y]:
-                    if 'energy' in self.attributes[x, y] and 'energy_source' in self.attributes[x, y]:
-                        if self.attributes[x, y]['energy'] > 0 and \
-                           'energy' in self.attributes[self.attributes[x, y]['energy_source']] and \
-                           self.attributes[self.attributes[x, y]['energy_source']]['energy'] > 0:
-
-                            for pos in positions:
-                                x1, y1 = x + pos[0], y + pos[1]
-                                if 0 <= x1 <= MAP_W - 1 and 0 <= y1 <= MAP_H - 1:
-                                    if 'wire' in self.level[x1, y1] or 'lamp' in self.level[x1, y1] or 'computer' in self.level[x1, y1]:
-                                        if not 'energy_source' in self.attributes[x1, y1] \
-                                           and self.attributes[x1, y1]['energy'] == 0:
-                                            self.setBlockAttribute(x1, y1, 'energy_source', (x, y))
-                                            self.setBlockAttribute(x1, y1, 'energy', 1)
-                        else:
-                            self.setBlockAttribute(x, y, 'energy', 0)
-                            self.removeBlockAttribute(x, y, 'energy_source')
-                    else:
-                        self.setBlockAttribute(x,y, 'energy', 0)
-                        self.removeBlockAttribute(x,y, 'energy_source')
-                elif 'lamp' in self.level[x, y]:
-                    if 'energy_source' in self.attributes[x, y] and 'energy' in self.attributes[x, y] and \
-                       'energy' in self.attributes[self.attributes[x, y]['energy_source']]:
-                        if self.attributes[x, y]['energy'] <= 0 or \
-                           self.attributes[self.attributes[x, y]['energy_source']]['energy'] <= 0:
-                            self.setBlockAttribute(x,y, 'energy', 0)
-                            self.removeBlockAttribute(x,y, 'energy_source')
-                    else:
+                                    self.game.changedBlocks.append([x1, y1])
+                    elif 'energy_source' in self.attributes[x, y]:
                         self.setBlockAttribute(x, y, 'energy', 0)
                         self.removeBlockAttribute(x, y, 'energy_source')
+                        self.game.changedBlocks.append([x, y])
+                elif 'energy_source' in self.attributes[x, y]:
+                    self.setBlockAttribute(x,y, 'energy', 0)
+                    self.removeBlockAttribute(x,y, 'energy_source')
+                    self.game.changedBlocks.append([x, y])
+            elif 'lamp' in self.level[x, y]:
+                if 'energy_source' in self.attributes[x, y] and 'energy' in self.attributes[x, y] and \
+                   'energy' in self.attributes[self.attributes[x, y]['energy_source']]:
+                    if self.attributes[x, y]['energy'] <= 0 or \
+                       self.attributes[self.attributes[x, y]['energy_source']]['energy'] <= 0 and \
+                       'energy_source' in self.attributes[x, y]:
+                        self.setBlockAttribute(x,y, 'energy', 0)
+                        self.removeBlockAttribute(x,y, 'energy_source')
+                        self.game.changedBlocks.append([x, y])
+                elif 'energy_source' in self.attributes[x, y]:
+                    self.setBlockAttribute(x,y, 'energy', 0)
+                    self.removeBlockAttribute(x,y, 'energy_source')
+                    self.game.changedBlocks.append([x, y])
 
         computer: Computer
         for computer in self.game.computers:
@@ -1293,18 +1319,10 @@ class Level:
                self.attributes[computer.x, computer.y]['energy'] > 0:
                 computer.startup()
 
-        self.acceptAllUpdates()
-
     def setLevel(self, level: dict):
         # Checking if there's any missing blocks.
-        lvl = {}
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                if not (x, y) in level:
-                    lvl[x, y] = 'grass'
-                else:
-                    lvl[x, y] = level[x, y]
-        self.level = lvl
+        for x,y in level:
+            self.level[x, y] = level[x, y]
 
     def setBlock(self, x: int, y: int, block: str):
         self.level[x, y] = block
@@ -1318,37 +1336,76 @@ class Level:
     def replaceBlockAttributes(self, x: int, y: int, attribute: dict):
         self.attributes[x, y] = attribute
 
-    def generateBlock(self, x, y):
+    def generateBlock(self, x, y, addToChangedBlocks=True, force=False):
         r = random.randint(0, 7)
         b = 'grass'
-        if r == 0:
-            b = 'wall'
-        if r == 1:
-            b = 'tree'
-        # if r == 2 and random.randint(0, 3) == 0:
-        #     b = self.createChest(x, y)
-        if r == 3 and random.randint(0, 3) == 0:
-            b = 'heart'
-        self.level[x, y] = b
-        self.attributes[x, y] = {}
+        if x < 0 or y < 0 or x > 1024 or y > 1024:
+            b = 'barrier'
+        else:
+            if r == 0:
+                b = 'wall'
+            if r == 1:
+                b = 'tree'
+            # if r == 2 and random.randint(0, 3) == 0:
+            #     b = self.createChest(x, y)
+            if r == 3 and random.randint(0, 3) == 0:
+                b = 'heart'
+        if not force:
+            if self.level[x, y] == 'grass':
+                self.level[x, y] = b
+                self.attributes[x, y] = {}
+        else:
+            self.level[x, y] = b
 
-        if self.__generated:
+        if self.__generated and addToChangedBlocks:
             self.game.changedBlocks.append([x, y])
 
+    def generateChunk(self, cx, cy):
+        for x in range(cx*8, cx*8+8):
+            for y in range(cy*8, cy*8+8):
+                self.generateBlock(x, y, addToChangedBlocks=False)
+        if (cx, cy) not in self.generatedChunks: self.generatedChunks.append((cx, cy))
+
+    def getChunk(self, cx, cy) -> tuple[dict, dict]:
+        if (cx, cy) in self.generatedChunks and (cx*8, cy*8) in self.level.lvl:
+            blocks, attributes = {}, {}
+            for x1 in range(cx * 8, cx * 8 + 8):
+                for y1 in range(cy * 8, cy * 8 + 8):
+                    blocks[x1, y1] = self.game.level.level[x1, y1]
+                    attributes[x1, y1] = self.game.level.attributes[x1, y1]
+            return blocks, attributes
+        elif (cx, cy) in self.generatedChunks and (cx*8, cy*8) not in self.level.lvl:
+            try:
+                f = open(self.game.savePath + str(cx) + '.' + str(cy) + '.region')
+                blocks, attributes = f.read().split('\n')
+                blocks, attributes = eval(blocks), eval(attributes)
+                for x, y in blocks:
+                    self.level[x, y] = blocks[x, y]
+                    self.attributes[x, y] = attributes[x, y]
+                print("Chunk", cx, cy, "loaded from disk")
+                return blocks, attributes
+            except:
+                print("Failed to load chunk from file")
+                traceback.print_exc()
+                self.game.level.generateChunk(cx, cy)
+                blocks, attributes = {}, {}
+                for x1 in range(cx * 8, cx * 8 + 8):
+                    for y1 in range(cy * 8, cy * 8 + 8):
+                        blocks[x1, y1] = self.game.level.level[x1, y1]
+                        attributes[x1, y1] = self.game.level.attributes[x1, y1]
+                return blocks, attributes
+
+        else:
+            self.game.level.generateChunk(cx, cy)
+            blocks, attributes = {}, {}
+            for x1 in range(cx * 8, cx * 8 + 8):
+                for y1 in range(cy * 8, cy * 8 + 8):
+                    blocks[x1, y1] = self.game.level.level[x1, y1]
+                    attributes[x1, y1] = self.game.level.attributes[x1, y1]
+            return blocks, attributes
+
     def generateLevel(self):
-        gen_start = time.time()
-
-        for x in range(MAP_W):
-            for y in range(MAP_H):
-                self.generateBlock(x, y)
-
-        gen_end = time.time()
-
-        self.__generated = True
-
-        # print(self.level)
-
-        print("Level has been successfully generated in", gen_end - gen_start, "seconds")
+        pass
 
     def createChest(self, x, y,
                     lootTable=None, maxItems=8) -> str:
@@ -1421,7 +1478,8 @@ class Lobby:
         self.players = []
 
     def __handleMessage(self, sock: socket.socket, addr: tuple, message: str):
-        print(message)
+        # print(message)
+
         # There can be multiple commands in one message, they are split with ;
         for msg in message:
             try:
@@ -1474,12 +1532,12 @@ class Lobby:
                 elif 'join_game' in msg:
                     print("Player joining the game...")
                     msg = msg.replace('join_game/', '').split('/')
-                    # Structure of request: join_game/gameid;
+                    # Structure of request: join_game/gameid/nickname;
                     gameid = msg[0]
                     # Finding battle with exact game id
                     for game in main.games:
                         if game.gameID == gameid:
-                            game.addPlayer(sock, addr)
+                            game.addPlayer(sock, addr, nickname=msg[1])
                             print("Player", addr[0], "joined the game", game.getGameIDString())
                             self.players.remove([sock, addr])
                 # If player wants to create the game
@@ -1558,21 +1616,15 @@ class Main:
             self.ip = socket.gethostbyname(socket.gethostname())
             self.port = 25000
 
-        if self.config.get('loadGames'):
-            for filename in os.listdir('savedGames/'):
-                gameid = 'Undefined'
-                try:
-                    f = open('savedGames/' + filename, 'r', encoding='utf-8')
-                    c = f.read()
-                    f.close()
+        try: os.mkdir(self.config.get('saves_folder'))
+        except: pass
 
-                    name, gameid, _ = filename.split('.')
+        for filename in os.listdir(self.config.get('saves_folder')):
+            name, gameid = filename.split('.')
 
-                    g = Game(name, gameid, level=c)
+            g = Game(name, gameid)
 
-                    self.games.append(g)
-                except Exception as e:
-                    print("Failed to load saved level for game", gameid, ": ", e)
+            self.games.append(g)
 
         print("Starting server on:\nip", self.ip, "\nport", self.port)
 
@@ -1637,6 +1689,7 @@ class Main:
     def shutDown(self):
         print("\nShutting down server.")
         for game in self.games:
+            game.save()
             game.stopGame()
             time.sleep(0.2)
         time.sleep(1)

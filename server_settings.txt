@@ -9,10 +9,8 @@
     'service_message_prefix': '[Server] ',
     'welcome_message': 'Welcome to my BattleKiller 2D server!',
 
-    # If this option is true, game levels will be saved after server shutdown
-    'saveGames': False,
-    # and loaded again after restart.
-    'loadGames': False,
+    'saves_folder': 'saves',
+    'autosave_delay': 60,
 
     # How many times a second computers will update (
     'computerClockSpeed': 1, # Hz
