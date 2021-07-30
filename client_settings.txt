@@ -2,5 +2,5 @@
 'localization': 'ru',
 'server_ip': '127.0.0.1',
 'server_port': 25000,
-'disable_sound': False
+'disable_sound': True
 }
